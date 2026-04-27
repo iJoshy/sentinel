@@ -35,6 +35,7 @@ from common.models import (
     DigestRequest,
     FollowUpCreate,
     GuardrailReport,
+    IncidentAnalysis,
     IncidentInput,
     IncidentResolveRequest,
     IncidentSummary,
@@ -306,6 +307,71 @@ def _scorecard_for_action(
         "rationale": rationale,
         "risk_if_wrong": risk_if_wrong,
     }
+
+
+def _backfill_remediation_actions_from_analysis(
+    db: Database,
+    job_id: str,
+    analysis: IncidentAnalysis,
+) -> None:
+    """Create action rows for completed jobs whose checklist was not seeded."""
+    incident_severity = analysis.summary.severity
+    fallback_check_sev = {
+        "critical": "high",
+        "high": "medium",
+        "medium": "low",
+        "low": "low",
+    }.get(incident_severity, "medium")
+    valid_severities = {"critical", "high", "medium", "low"}
+    evidence_pool = list(analysis.root_cause.supporting_evidence or [])
+
+    rec_sevs = list(analysis.remediation.recommended_severities)
+    while len(rec_sevs) < len(analysis.remediation.recommended_actions):
+        rec_sevs.append(incident_severity)
+
+    for text, sev in zip(analysis.remediation.recommended_actions, rec_sevs):
+        severity = sev if sev in valid_severities else incident_severity
+        scorecard = _scorecard_for_action(
+            action_text=text,
+            action_type="recommended",
+            root_cause_summary=analysis.root_cause.likely_root_cause,
+            root_confidence=analysis.root_cause.confidence,
+            evidence_pool=evidence_pool,
+        )
+        db.seed_remediation_actions(
+            job_id,
+            [text],
+            action_type="recommended",
+            severity=severity,
+            confidence=scorecard["confidence"],
+            evidence=scorecard["evidence"],
+            rationale=scorecard["rationale"],
+            risk_if_wrong=scorecard["risk_if_wrong"],
+        )
+
+    chk_sevs = list(analysis.remediation.check_severities)
+    while len(chk_sevs) < len(analysis.remediation.next_checks):
+        chk_sevs.append(fallback_check_sev)
+
+    for text, sev in zip(analysis.remediation.next_checks, chk_sevs):
+        severity = sev if sev in valid_severities else fallback_check_sev
+        scorecard = _scorecard_for_action(
+            action_text=text,
+            action_type="check",
+            root_cause_summary=analysis.root_cause.likely_root_cause,
+            root_confidence=analysis.root_cause.confidence,
+            evidence_pool=evidence_pool,
+        )
+        db.seed_remediation_actions(
+            job_id,
+            [text],
+            action_type="check",
+            severity=severity,
+            confidence=scorecard["confidence"],
+            evidence=scorecard["evidence"],
+            rationale=scorecard["rationale"],
+            risk_if_wrong=scorecard["risk_if_wrong"],
+        )
 
 
 def _build_workflow_export(
@@ -1032,6 +1098,24 @@ def list_actions(
         row = db.get_job(job_id, clerk_user_id=user.user_id)
         if not row:
             raise HTTPException(status_code=404, detail="Job not found")
+        actions = db.list_remediation_actions(job_id)
+        if actions:
+            return actions
+
+        analysis_data = _job_view(row).get("analysis")
+        if not analysis_data:
+            return []
+
+        try:
+            analysis = IncidentAnalysis.model_validate(analysis_data)
+            _backfill_remediation_actions_from_analysis(db, job_id, analysis)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Failed to backfill remediation actions for job_id=%s", job_id)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load remediation actions: {exc}",
+            ) from exc
+
         return db.list_remediation_actions(job_id)
     finally:
         db.close()

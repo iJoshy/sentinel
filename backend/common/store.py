@@ -889,34 +889,50 @@ class _SentinelDb:
     ) -> None:
         now = self._now_iso()
         for text in actions:
-            self._execute(
-                """
-                INSERT INTO remediation_actions (
-                  id, job_id, action_text, action_type, status,
-                  severity, confidence, evidence_json, rationale, risk_if_wrong,
-                  created_at, engineer_submission, source_anchor_action_id
+            params = {
+                "id": str(uuid.uuid4()),
+                "job_id": job_id,
+                "action_text": text,
+                "action_type": action_type,
+                "severity": severity,
+                "confidence": confidence,
+                "evidence_json": json.dumps(evidence or []),
+                "rationale": rationale,
+                "risk_if_wrong": risk_if_wrong,
+                "created_at": now,
+                "engineer_submission": engineer_submission,
+                "source_anchor_action_id": source_anchor_action_id,
+            }
+            try:
+                self._execute(
+                    """
+                    INSERT INTO remediation_actions (
+                      id, job_id, action_text, action_type, status,
+                      severity, confidence, evidence_json, rationale, risk_if_wrong,
+                      created_at, engineer_submission, source_anchor_action_id
+                    )
+                    VALUES (
+                      :id, :job_id, :action_text, :action_type, 'pending',
+                      :severity, :confidence, :evidence_json, :rationale, :risk_if_wrong,
+                      :created_at, :engineer_submission, :source_anchor_action_id
+                    )
+                    """,
+                    params,
                 )
-                VALUES (
-                  :id, :job_id, :action_text, :action_type, 'pending',
-                  :severity, :confidence, :evidence_json, :rationale, :risk_if_wrong,
-                  :created_at, :engineer_submission, :source_anchor_action_id
+            except Exception:
+                # Older Aurora schemas may not have metadata columns yet. Keep the
+                # operator checklist visible while migrations catch up.
+                self._execute(
+                    """
+                    INSERT INTO remediation_actions (
+                      id, job_id, action_text, action_type, status, severity, created_at
+                    )
+                    VALUES (
+                      :id, :job_id, :action_text, :action_type, 'pending', :severity, :created_at
+                    )
+                    """,
+                    params,
                 )
-                """,
-                {
-                    "id": str(uuid.uuid4()),
-                    "job_id": job_id,
-                    "action_text": text,
-                    "action_type": action_type,
-                    "severity": severity,
-                    "confidence": confidence,
-                    "evidence_json": json.dumps(evidence or []),
-                    "rationale": rationale,
-                    "risk_if_wrong": risk_if_wrong,
-                    "created_at": now,
-                    "engineer_submission": engineer_submission,
-                    "source_anchor_action_id": source_anchor_action_id,
-                },
-            )
 
     def list_remediation_actions(self, job_id: str) -> list[dict]:
         rows = self._query(

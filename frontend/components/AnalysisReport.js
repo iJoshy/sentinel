@@ -1116,6 +1116,7 @@ function buildTrail(actions) {
 function RemediationChecklist({ jobId, getToken, userProfile }) {
   const [actions, setActions] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [chatAction, setChatAction] = useState(null);
   const [remindAction, setRemindAction] = useState(null);
   const [followUps, setFollowUps] = useState([]);
@@ -1125,6 +1126,7 @@ function RemediationChecklist({ jobId, getToken, userProfile }) {
       setActions([]);
       setFollowUps([]);
       setLoaded(false);
+      setLoadError("");
       setChatAction(null);
       setRemindAction(null);
       return;
@@ -1132,6 +1134,7 @@ function RemediationChecklist({ jobId, getToken, userProfile }) {
     setActions([]);
     setFollowUps([]);
     setLoaded(false);
+    setLoadError("");
     setChatAction(null);
     setRemindAction(null);
     let cancel = false;
@@ -1146,8 +1149,10 @@ function RemediationChecklist({ jobId, getToken, userProfile }) {
           setActions(actionsData);
           setFollowUps(fuData);
         }
-      } catch {
-        /* best-effort */
+      } catch (e) {
+        if (!cancel) {
+          setLoadError(e?.message || "Failed to load remediation actions.");
+        }
       } finally {
         if (!cancel) setLoaded(true);
       }
@@ -1228,6 +1233,15 @@ function RemediationChecklist({ jobId, getToken, userProfile }) {
             <SkeletonRect key={i} height={60} />
           ))}
         </div>
+      </article>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <article className="card-elevated report-card" id="report-remediation-checklist">
+        <h2>Remediation TODO</h2>
+        <p className="error compact">{loadError}</p>
       </article>
     );
   }
@@ -1362,6 +1376,7 @@ function RemediationChecklist({ jobId, getToken, userProfile }) {
 function ImmediateChecksCard({ jobId, getToken, userProfile }) {
   const [actions, setActions] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [remindAction, setRemindAction] = useState(null);
   const [followUps, setFollowUps] = useState([]);
 
@@ -1370,12 +1385,14 @@ function ImmediateChecksCard({ jobId, getToken, userProfile }) {
       setActions([]);
       setFollowUps([]);
       setLoaded(false);
+      setLoadError("");
       setRemindAction(null);
       return;
     }
     setActions([]);
     setFollowUps([]);
     setLoaded(false);
+    setLoadError("");
     setRemindAction(null);
     let cancel = false;
     (async () => {
@@ -1389,8 +1406,10 @@ function ImmediateChecksCard({ jobId, getToken, userProfile }) {
           setActions(data.filter((a) => a.action_type === "check" || a.action_type === "followup_check" || (a.action_type === "trail" && data.find((p) => p.id === a.parent_action_id)?.action_type === "check")));
           setFollowUps(fuData);
         }
-      } catch {
-        /* best-effort */
+      } catch (e) {
+        if (!cancel) {
+          setLoadError(e?.message || "Failed to load immediate checks.");
+        }
       } finally {
         if (!cancel) setLoaded(true);
       }
@@ -1459,6 +1478,15 @@ function ImmediateChecksCard({ jobId, getToken, userProfile }) {
             <SkeletonRect key={i} height={60} />
           ))}
         </div>
+      </article>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <article className="card-elevated report-card" id="report-immediate-checks">
+        <h2>Immediate Checks</h2>
+        <p className="error compact">{loadError}</p>
       </article>
     );
   }

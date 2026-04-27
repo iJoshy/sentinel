@@ -102,6 +102,19 @@ CREATE TABLE IF NOT EXISTS remediation_actions (
   created_at TEXT NOT NULL
 );
 
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS assigned_to TEXT;
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS completed_at TEXT;
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS notes TEXT;
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS due_date TEXT;
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS parent_action_id TEXT;
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS eval_response TEXT;
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS engineer_submission TEXT;
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS source_anchor_action_id TEXT;
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS confidence TEXT NOT NULL DEFAULT 'medium';
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS evidence_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS rationale TEXT;
+ALTER TABLE remediation_actions ADD COLUMN IF NOT EXISTS risk_if_wrong TEXT;
+
 CREATE TABLE IF NOT EXISTS integrations (
   id TEXT PRIMARY KEY,
   clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
