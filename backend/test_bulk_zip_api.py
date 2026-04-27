@@ -3,10 +3,23 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
+import tomllib
 import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+def test_api_lambda_package_includes_multipart_parser() -> None:
+    """Production Lambda packaging must include FastAPI's multipart parser dependency."""
+
+    pyproject = tomllib.loads(
+        (Path(__file__).resolve().parent / "api" / "pyproject.toml").read_text()
+    )
+    deps = pyproject["project"]["dependencies"]
+
+    assert any(dep.lower().startswith("python-multipart") for dep in deps)
 
 
 @pytest.fixture
