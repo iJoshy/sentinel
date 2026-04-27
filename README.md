@@ -105,6 +105,7 @@ Production incidents rarely arrive as clean stories. Operators paste logs, paste
 | Path | Purpose |
 |------|---------|
 | [backend/](backend/) | FastAPI app, agents, pipeline, store, reports, scheduler, ingest |
+| [backend/tests/](backend/tests/) | Consolidated backend pytest suite |
 | [frontend/](frontend/) | Next.js 14 (Pages Router) dashboard |
 | [terraform/](terraform/) | Stage-based AWS IaC (see guides 1–8) |
 | [scripts/](scripts/) | Local orchestration (`run_local.py`), utilities |
@@ -313,13 +314,12 @@ Dispatch runs from the same **`run_job`** path used locally and on **Lambda**. P
 Backend tests use **pytest**. From the repo root:
 
 ```bash
-cd backend
-uv run pytest
+uv run --project backend pytest backend/tests
 ```
 
-There are also package-level tests under services such as `backend/ingest/` and `backend/database/`; running `pytest` from `backend/` discovers the main suite. For ingestion verification specifically, see [backend/ingest/test_ingest.py](backend/ingest/test_ingest.py) and [guides/3_ingestion.md](guides/3_ingestion.md).
+Test directory:
 
-Beyond automated suites, **end-to-end validation** means exercising realistic operator workflows against a running stack (for example, submitting an incident, waiting for job completion, and confirming analysis and exports in the UI), complementing faster pytest coverage.
+- `backend/tests/`
 
 ---
 
