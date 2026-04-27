@@ -490,7 +490,7 @@ export async function streamActionChat(jobId, actionId, message, history, token,
       content: typeof m?.content === "string" ? m.content.trim() : "",
     }))
     .filter((m) => (m.role === "user" || m.role === "assistant") && m.content.length > 0);
-  const res = await fetch(`${BASE_URL}/api/jobs/${enc}/actions/${aid}/chat`, {
+  const res = await fetch(`${baseUrl}/api/jobs/${enc}/actions/${aid}/chat`, {
     method: "POST",
     headers,
     body: JSON.stringify({ message, history: sanitizedHistory }),
