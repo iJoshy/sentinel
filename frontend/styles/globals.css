@@ -2735,3 +2735,52 @@ tr.audit-tr-nested[data-depth="3"] td {
   cursor: pointer;
   user-select: none;
 }
+
+/* --- Skeleton Loading States --- */
+@keyframes skeleton-pulse {
+  0% {
+    background-color: var(--surface-2);
+    opacity: 0.5;
+  }
+  50% {
+    background-color: var(--border-strong);
+    opacity: 0.8;
+  }
+  100% {
+    background-color: var(--surface-2);
+    opacity: 0.5;
+  }
+}
+
+.skeleton {
+  animation: skeleton-pulse 1.8s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-2);
+  display: block;
+}
+
+.skeleton-text {
+  height: 0.75rem;
+  width: 100%;
+  margin-bottom: 0.6rem;
+}
+
+.skeleton-title {
+  height: 1.5rem;
+  width: 60%;
+  margin-bottom: 1.25rem;
+}
+
+.skeleton-rect {
+  width: 100%;
+  min-height: 24px;
+}
+
+.skeleton-circle {
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.skeleton-container {
+  width: 100%;
+}

@@ -13,6 +13,7 @@ import {
 import AnalysisReport from "../components/AnalysisReport";
 import AppShell from "../components/AppShell";
 import LogDataCharts from "../components/LogDataCharts";
+import { SkeletonRect, SkeletonText, SkeletonTitle } from "../components/Skeleton";
 import { fetchJob, fetchJobs, generateDigest } from "../lib/api";
 import { isClerkEnabled } from "../lib/clerk";
 
@@ -128,8 +129,29 @@ function IncidentDigest({ tokenProvider }) {
       {err && <p className="error compact" style={{ marginBottom: 12 }}>{err}</p>}
 
       {loading && (
-        <div style={{ textAlign: "center", padding: "32px 0", color: "var(--muted)", fontSize: 13 }}>
-          Loading digest…
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {[1, 2, 3, 4, 5].map((i) => (
+              <div key={i} style={{ flex: "1 1 110px", minWidth: 100, background: "var(--surface-2)", borderRadius: "var(--radius-sm)", padding: "12px 16px", border: "1px solid var(--border)" }}>
+                <div className="skeleton" style={{ width: "40%", height: 8, marginBottom: 8 }} />
+                <div className="skeleton" style={{ width: "60%", height: 24 }} />
+              </div>
+            ))}
+          </div>
+          <div>
+            <div className="skeleton" style={{ width: "100px", height: 10, marginBottom: 12 }} />
+            <SkeletonRect height={180} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+            <div style={{ background: "var(--surface)", borderRadius: "var(--radius-sm)", padding: "14px 16px", border: "1px solid var(--border)" }}>
+              <div className="skeleton" style={{ width: "80px", height: 10, marginBottom: 16 }} />
+              <SkeletonText lines={4} />
+            </div>
+            <div style={{ background: "var(--surface)", borderRadius: "var(--radius-sm)", padding: "14px 16px", border: "1px solid var(--border)" }}>
+              <div className="skeleton" style={{ width: "80px", height: 10, marginBottom: 16 }} />
+              <SkeletonText lines={4} />
+            </div>
+          </div>
         </div>
       )}
 
@@ -250,18 +272,23 @@ function runLabel(row) {
 
 function DashboardContent({ tokenProvider = null }) {
   const [jobRows, setJobRows] = useState([]);
+  const [loadingJobs, setLoadingJobs] = useState(false);
   const [filterValue, setFilterValue] = useState("");
   const [selected, setSelected] = useState(null);
   const [error, setError] = useState("");
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   const loadJobs = useCallback(async () => {
+    setLoadingJobs(true);
+    setError("");
     try {
       const token = tokenProvider ? await tokenProvider() : null;
       const rows = await fetchJobs(20, token);
       setJobRows(rows);
     } catch (err) {
       setError(err.message || "Failed to load runs");
+    } finally {
+      setLoadingJobs(false);
     }
   }, [tokenProvider]);
 
@@ -307,28 +334,45 @@ function DashboardContent({ tokenProvider = null }) {
             <span className="muted small" style={{ display: "block", marginBottom: 6 }}>
               Run
             </span>
-            <select
-              className="input"
-              value={filterValue}
-              onChange={onFilterChange}
-              style={{ width: "100%", marginTop: 0 }}
-            >
-              <option value="">{jobRows.length ? "Choose a run…" : "No runs yet — use Analyze first"}</option>
-              {jobRows.map((row) => (
-                <option key={row.job_id} value={row.job_id}>
-                  {runLabel(row)}
-                </option>
-              ))}
-            </select>
+            {loadingJobs ? (
+              <SkeletonRect height={38} style={{ width: "100%", borderRadius: 8 }} />
+            ) : (
+              <select
+                className="input"
+                value={filterValue}
+                onChange={onFilterChange}
+                style={{ width: "100%", marginTop: 0 }}
+              >
+                <option value="">{jobRows.length ? "Choose a run…" : "No runs yet — use Analyze first"}</option>
+                {jobRows.map((row) => (
+                  <option key={row.job_id} value={row.job_id}>
+                    {runLabel(row)}
+                  </option>
+                ))}
+              </select>
+            )}
           </label>
           <button type="button" className="btn btn-muted" style={{ alignSelf: "flex-end" }} onClick={loadJobs}>
             Refresh list
           </button>
         </div>
-        {loadingDetail ? <p className="muted small" style={{ margin: "10px 0 0" }}>Loading…</p> : null}
+        {loadingDetail ? (
+          <div style={{ margin: "12px 0 0" }}>
+            <SkeletonText lines={1} className="skeleton-rect" style={{ width: "120px", height: 14 }} />
+          </div>
+        ) : null}
       </div>
 
-      {selected && !loadingDetail ? (
+      {loadingDetail ? (
+        <div className="card-elevated" style={{ padding: "24px" }}>
+          <SkeletonTitle />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24, marginBottom: 24 }}>
+            <SkeletonRect height={200} />
+            <SkeletonRect height={200} />
+          </div>
+          <SkeletonText lines={10} />
+        </div>
+      ) : selected ? (
         <>
           <LogDataCharts result={selected} />
           <AnalysisReport

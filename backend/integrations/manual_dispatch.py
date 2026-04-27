@@ -17,40 +17,7 @@ from __future__ import annotations
 import os
 import sys
 
-from common.models import (
-    GuardrailReport,
-    IncidentAnalysis,
-    IncidentSummary,
-    RemediationPlan,
-    RootCauseAnalysis,
-)
-from integrations.dispatcher import dispatch_all
-
-
-def _sample_analysis() -> IncidentAnalysis:
-    return IncidentAnalysis(
-        incident_id="inc-manual-test",
-        job_id="job-manual-test",
-        summary=IncidentSummary(
-            summary="Manual integration smoke test",
-            severity="high",
-            severity_reason="synthetic payload for outbound dispatch",
-        ),
-        root_cause=RootCauseAnalysis(
-            likely_root_cause="Not applicable — test dispatch only",
-            confidence="low",
-            reasoning="integrations.manual_dispatch",
-        ),
-        remediation=RemediationPlan(
-            recommended_actions=["Verify webhook received this payload", "Check server logs"],
-            next_checks=["Confirm 200 from receiver", "Rotate secret if URL was exposed"],
-            risk_if_unresolved="None for a test run",
-            recommended_severities=["medium", "medium"],
-            check_severities=["low", "low"],
-        ),
-        guardrails=GuardrailReport(),
-        models={"support": "manual", "root_cause": "manual", "remediation": "manual"},
-    )
+from integrations.dispatcher import dispatch_all, synthetic_test_analysis
 
 
 def main() -> int:
@@ -68,7 +35,7 @@ def main() -> int:
         "enabled": True,
         "config": {"webhook_url": url},
     }
-    analysis = _sample_analysis()
+    analysis = synthetic_test_analysis()
     title = (os.getenv("INCIDENT_TITLE") or "").strip()
     source = (os.getenv("INCIDENT_SOURCE") or "").strip()
     print(f"Dispatching {itype} → {url[:60]}…")

@@ -65,12 +65,43 @@ async function request(path, options = {}) {
         if (parseErr.status === 401) throw parseErr;
       }
     }
+    if (text.trim()) {
+      try {
+        const json = JSON.parse(text);
+        if (json.detail !== undefined && json.detail !== null) {
+          const d = json.detail;
+          const msg =
+            typeof d === "string"
+              ? d
+              : Array.isArray(d)
+                ? d.map((x) => (typeof x === "object" && x?.msg ? x.msg : JSON.stringify(x))).join(" ")
+                : String(d);
+          const err = new Error(msg || `Request failed: ${res.status}`);
+          err.status = res.status;
+          throw err;
+        }
+      } catch (parseErr) {
+        if (parseErr.status) throw parseErr;
+      }
+    }
     const err = new Error(text || `Request failed: ${res.status}`);
     err.status = res.status;
     throw err;
   }
 
-  return res.json();
+  // DELETE and some other routes return 204 with no body — do not call .json().
+  if (res.status === 204 || res.status === 205) {
+    return null;
+  }
+  const text = await res.text();
+  if (!text.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error(`Invalid JSON from API (${path}): ${e.message}`);
+  }
 }
 
 export async function createIncident(payload, token) {
@@ -131,7 +162,18 @@ export async function uploadIncidentsZip(file, options = {}, token) {
     err.status = res.status;
     throw err;
   }
-  return res.json();
+  if (res.status === 204 || res.status === 205) {
+    return null;
+  }
+  const okText = await res.text();
+  if (!okText.trim()) {
+    return null;
+  }
+  try {
+    return JSON.parse(okText);
+  } catch (e) {
+    throw new Error(`Invalid JSON from API (bulk-zip): ${e.message}`);
+  }
 }
 
 export async function fetchRemediationActions(jobId, token) {

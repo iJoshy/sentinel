@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import AppShell from "../components/AppShell";
 import AuditTrailView from "../components/AuditTrailView";
+import { SkeletonRect, SkeletonText, SkeletonTitle } from "../components/Skeleton";
 import { downloadAuditPdf, downloadJobExport, fetchJobWorkflow, fetchJobs } from "../lib/api";
 import { isClerkEnabled } from "../lib/clerk";
 
@@ -26,6 +27,7 @@ function runLabel(row) {
 function AuditContent({ tokenProvider = null }) {
   const router = useRouter();
   const [jobRows, setJobRows] = useState([]);
+  const [loadingJobs, setLoadingJobs] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState("");
   const [manualId, setManualId] = useState("");
   const [workflow, setWorkflow] = useState(null);
@@ -33,12 +35,16 @@ function AuditContent({ tokenProvider = null }) {
   const [err, setErr] = useState("");
 
   const loadJobs = useCallback(async () => {
+    setLoadingJobs(true);
+    setErr("");
     try {
       const token = tokenProvider ? await tokenProvider() : null;
       const rows = await fetchJobs(50, token);
       setJobRows(rows);
     } catch (e) {
       setErr(e.message || "Failed to load job list");
+    } finally {
+      setLoadingJobs(false);
     }
   }, [tokenProvider]);
 
@@ -140,19 +146,23 @@ function AuditContent({ tokenProvider = null }) {
             <span className="muted small" style={{ display: "block", marginBottom: 6 }}>
               Run
             </span>
-            <select
-              className="input"
-              value={selectedJobId}
-              onChange={onSelectRun}
-              style={{ width: "100%", marginTop: 0 }}
-            >
-              <option value="">{jobRows.length ? "Choose a run…" : "No runs yet — use Analyze first"}</option>
-              {jobRows.map((row) => (
-                <option key={row.job_id} value={row.job_id}>
-                  {runLabel(row)}
-                </option>
-              ))}
-            </select>
+            {loadingJobs ? (
+              <SkeletonRect height={38} style={{ width: "100%", borderRadius: 8 }} />
+            ) : (
+              <select
+                className="input"
+                value={selectedJobId}
+                onChange={onSelectRun}
+                style={{ width: "100%", marginTop: 0 }}
+              >
+                <option value="">{jobRows.length ? "Choose a run…" : "No runs yet — use Analyze first"}</option>
+                {jobRows.map((row) => (
+                  <option key={row.job_id} value={row.job_id}>
+                    {runLabel(row)}
+                  </option>
+                ))}
+              </select>
+            )}
           </label>
           <div style={{ flex: "1 1 200px" }}>
             <span className="muted small" style={{ display: "block", marginBottom: 6 }}>
@@ -203,11 +213,14 @@ function AuditContent({ tokenProvider = null }) {
             </a>
           </p>
         ) : null}
-        {loading ? <p className="muted small" style={{ margin: "10px 0 0" }}>Loading trail…</p> : null}
+        {loading ? (
+          <div style={{ margin: "12px 0 0" }}>
+            <SkeletonText lines={1} style={{ width: "120px", height: 14 }} />
+          </div>
+        ) : null}
       </div>
 
       {err ? <p className="error compact">{err}</p> : null}
-
       {!selectedJobId && !loading ? (
         <p className="muted small" style={{ marginBottom: 24 }}>
           Pick a <strong>run</strong> or enter a <strong>job ID</strong> to load the audit trail. Create runs on{" "}
@@ -222,7 +235,24 @@ function AuditContent({ tokenProvider = null }) {
         </p>
       ) : null}
 
-      {selectedJobId && !loading && !err && workflow ? <AuditTrailView workflow={workflow} /> : null}
+      {loading ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <div className="card-elevated" style={{ padding: "24px" }}>
+            <SkeletonTitle />
+            <SkeletonText lines={6} />
+          </div>
+          <div className="card-elevated" style={{ padding: "24px" }}>
+            <SkeletonTitle />
+            <SkeletonRect height={120} />
+          </div>
+          <div className="card-elevated" style={{ padding: "24px" }}>
+            <SkeletonTitle />
+            <SkeletonText lines={10} />
+          </div>
+        </div>
+      ) : selectedJobId && !err && workflow ? (
+        <AuditTrailView workflow={workflow} />
+      ) : null}
     </AppShell>
   );
 }

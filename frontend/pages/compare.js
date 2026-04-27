@@ -2,6 +2,7 @@ import { RedirectToSignIn, SignedIn, SignedOut, useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useState } from "react";
 
 import AppShell from "../components/AppShell";
+import { SkeletonRect, SkeletonText, SkeletonTitle } from "../components/Skeleton";
 import { compareJobs, fetchJobs } from "../lib/api";
 import { isClerkEnabled } from "../lib/clerk";
 
@@ -23,6 +24,7 @@ function runLabel(row) {
 
 function CompareContent({ tokenProvider = null }) {
   const [jobRows, setJobRows] = useState([]);
+  const [loadingJobs, setLoadingJobs] = useState(false);
   const [jobIdA, setJobIdA] = useState("");
   const [jobIdB, setJobIdB] = useState("");
   const [result, setResult] = useState(null);
@@ -30,13 +32,16 @@ function CompareContent({ tokenProvider = null }) {
   const [loading, setLoading] = useState(false);
 
   const loadJobs = useCallback(async () => {
+    setLoadingJobs(true);
     try {
       setErr("");
       const token = tokenProvider ? await tokenProvider() : null;
-      const rows = await fetchJobs(50, token);
+      const rows = await fetchJobs(100, token);
       setJobRows(rows);
     } catch (e) {
-      setErr(e.message || "Failed to load job list");
+      setErr(e.message || "Failed to load jobs");
+    } finally {
+      setLoadingJobs(false);
     }
   }, [tokenProvider]);
 
@@ -89,48 +94,56 @@ function CompareContent({ tokenProvider = null }) {
             <span className="muted small" style={{ display: "block", marginBottom: 6 }}>
               Run A
             </span>
-            <select
-              className="input"
-              value={jobIdA}
-              onChange={(e) => {
-                setJobIdA(e.target.value);
-                setResult(null);
-              }}
-              style={{ width: "100%", marginTop: 0 }}
-            >
-              <option value="">
-                {completed.length ? "Choose run A…" : "No completed runs — use Analyze first"}
-              </option>
-              {completed.map((row) => (
-                <option key={`a-${row.job_id}`} value={row.job_id}>
-                  {runLabel(row)}
+            {loadingJobs ? (
+              <SkeletonRect height={38} style={{ width: "100%", borderRadius: 8 }} />
+            ) : (
+              <select
+                className="input"
+                value={jobIdA}
+                onChange={(e) => {
+                  setJobIdA(e.target.value);
+                  setResult(null);
+                }}
+                style={{ width: "100%", marginTop: 0 }}
+              >
+                <option value="">
+                  {completed.length ? "Choose run A…" : "No completed runs — use Analyze first"}
                 </option>
-              ))}
-            </select>
+                {completed.map((row) => (
+                  <option key={`a-${row.job_id}`} value={row.job_id}>
+                    {runLabel(row)}
+                  </option>
+                ))}
+              </select>
+            )}
           </label>
 
           <label className="dashboard-filter-label" style={{ flex: "1 1 240px", minWidth: 0, margin: 0 }}>
             <span className="muted small" style={{ display: "block", marginBottom: 6 }}>
               Run B
             </span>
-            <select
-              className="input"
-              value={jobIdB}
-              onChange={(e) => {
-                setJobIdB(e.target.value);
-                setResult(null);
-              }}
-              style={{ width: "100%", marginTop: 0 }}
-            >
-              <option value="">
-                {completed.length ? "Choose run B…" : "No completed runs — use Analyze first"}
-              </option>
-              {completed.map((row) => (
-                <option key={`b-${row.job_id}`} value={row.job_id}>
-                  {runLabel(row)}
+            {loadingJobs ? (
+              <SkeletonRect height={38} style={{ width: "100%", borderRadius: 8 }} />
+            ) : (
+              <select
+                className="input"
+                value={jobIdB}
+                onChange={(e) => {
+                  setJobIdB(e.target.value);
+                  setResult(null);
+                }}
+                style={{ width: "100%", marginTop: 0 }}
+              >
+                <option value="">
+                  {completed.length ? "Choose run B…" : "No completed runs — use Analyze first"}
                 </option>
-              ))}
-            </select>
+                {completed.map((row) => (
+                  <option key={`b-${row.job_id}`} value={row.job_id}>
+                    {runLabel(row)}
+                  </option>
+                ))}
+              </select>
+            )}
           </label>
 
           <button
@@ -149,7 +162,16 @@ function CompareContent({ tokenProvider = null }) {
 
       {err ? <p className="error compact">{err}</p> : null}
 
-      {!completed.length && !err ? (
+      {loading ? (
+        <div className="card-elevated" style={{ padding: "20px 24px" }}>
+          <SkeletonTitle />
+          <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+            <div className="skeleton" style={{ width: 120, height: 16 }} />
+            <div className="skeleton" style={{ width: 120, height: 16 }} />
+          </div>
+          <SkeletonText lines={6} />
+        </div>
+      ) : !completed.length && !err ? (
         <p className="muted small" style={{ marginBottom: 24 }}>
           Create <strong>completed</strong> runs on{" "}
           <a className="link-subtle" href="/analyze">

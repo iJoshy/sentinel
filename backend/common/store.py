@@ -1009,6 +1009,27 @@ class _SentinelDb:
         )
         return int_id
 
+    @staticmethod
+    def _coerce_integration_enabled(val: Any) -> bool:
+        """Normalize enabled flag from SQLite/Aurora scalar types into a bool."""
+        if val is None:
+            return True
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, (int, float)):
+            return int(val) != 0
+        if isinstance(val, (bytes, bytearray)):
+            try:
+                val = val.decode().strip()
+            except UnicodeDecodeError:
+                return True
+        text = str(val).strip().lower()
+        if text in ("1", "true", "yes", "on"):
+            return True
+        if text in ("0", "false", "no", "off", ""):
+            return False
+        return True
+
     def list_integrations(self, clerk_user_id: str) -> list[dict]:
         rows = self._query(
             """
@@ -1025,7 +1046,7 @@ class _SentinelDb:
                 item["config"] = json.loads(item.pop("config_json", "{}") or "{}")
             except json.JSONDecodeError:
                 item["config"] = {}
-            item["enabled"] = bool(item.get("enabled", True))
+            item["enabled"] = self._coerce_integration_enabled(item.get("enabled"))
             out.append(item)
         return out
 

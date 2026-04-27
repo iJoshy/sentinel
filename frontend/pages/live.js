@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import AppShell from "../components/AppShell";
 import FeatureLockedCard from "../components/FeatureLockedCard";
+import { SkeletonRect } from "../components/Skeleton";
 import { useEntitlements } from "../context/EntitlementContext";
 import { fetchLiveBoard, refreshLiveBoard, updateLiveConfig } from "../lib/api";
 import { isClerkEnabled } from "../lib/clerk";
@@ -346,8 +347,9 @@ function EnabledBoard({ tokenProvider = null }) {
       ) : null}
 
       {loading ? (
-        <div className="card-elevated live-loading-card">
-          <p className="muted small" style={{ margin: 0 }}>Loading live incidents…</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          <SkeletonRect height={200} style={{ borderRadius: "var(--radius, 12px)" }} />
+          <SkeletonRect height={200} style={{ borderRadius: "var(--radius, 12px)" }} />
         </div>
       ) : (
         <section className="live-incident-stack">
@@ -385,8 +387,13 @@ function LiveContent({ tokenProvider = null }) {
       </header>
 
       {loading ? (
-        <div className="card-elevated live-loading-card">
-          <p className="muted small" style={{ margin: 0 }}>Loading entitlements…</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+          <SkeletonRect height={100} style={{ borderRadius: "var(--radius, 12px)" }} />
+          <SkeletonRect height={300} style={{ borderRadius: "var(--radius, 12px)" }} />
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <SkeletonRect height={150} />
+            <SkeletonRect height={150} />
+          </div>
         </div>
       ) : enabled ? (
         <EnabledBoard tokenProvider={tokenProvider} />

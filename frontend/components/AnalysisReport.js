@@ -15,6 +15,7 @@ import {
   updateRemediationAction,
 } from "../lib/api";
 import { detectChatInjection } from "../lib/contentGuard";
+import { SkeletonRect, SkeletonText, SkeletonTitle } from "./Skeleton";
 
 // ── Chat drawer
 
@@ -1206,7 +1207,32 @@ function RemediationChecklist({ jobId, getToken, userProfile }) {
     return result;
   }
 
-  if (!loaded || actions.length === 0) return null;
+  if (!loaded) {
+    return (
+      <article className="card-elevated report-card">
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ flex: 1 }}>
+            <div className="skeleton" style={{ width: "120px", height: 20, marginBottom: 8 }} />
+            <div className="skeleton" style={{ width: "240px", height: 12 }} />
+          </div>
+          <div className="skeleton" style={{ width: "40px", height: 20 }} />
+        </div>
+        <div className="skeleton" style={{ width: "100%", height: 4, borderRadius: 2, marginBottom: 20 }} />
+        <div style={{ display: "flex", gap: 12, marginBottom: 20 }}>
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="skeleton" style={{ width: 100, height: 12, borderRadius: 6 }} />
+          ))}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {[1, 2, 3, 4].map((i) => (
+            <SkeletonRect key={i} height={60} />
+          ))}
+        </div>
+      </article>
+    );
+  }
+
+  if (actions.length === 0) return null;
 
   const recommended = actions.filter(
     (a) => a.action_type === "recommended" || a.action_type === "trail"
@@ -1423,7 +1449,21 @@ function ImmediateChecksCard({ jobId, getToken, userProfile }) {
     return result;
   }
 
-  if (!loaded || actions.length === 0) return null;
+  if (!loaded) {
+    return (
+      <article className="card-elevated report-card">
+        <div className="skeleton" style={{ width: "160px", height: 24, marginBottom: 12 }} />
+        <div className="skeleton" style={{ width: "280px", height: 12, marginBottom: 24 }} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {[1, 2].map((i) => (
+            <SkeletonRect key={i} height={60} />
+          ))}
+        </div>
+      </article>
+    );
+  }
+
+  if (actions.length === 0) return null;
 
   const trail = buildTrail(actions);
   if (!trail.length) return null;

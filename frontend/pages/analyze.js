@@ -132,6 +132,8 @@ function HomeContent({ getToken = null, userProfile = null }) {
     setBulkResults(null);
     setBulkPollIds(null);
     setBulkJobStatuses({});
+    // Bulk ZIP does not use the paste box; clear stale text from a prior manual analyze.
+    updateDraft({ text: "", source: "upload" });
     try {
       const token = clerkEnabled && getToken ? await getToken() : null;
       const result = await uploadIncidentsZip(
@@ -143,7 +145,6 @@ function HomeContent({ getToken = null, userProfile = null }) {
         return;
       }
       const created = result.created || [];
-      updateDraft({ source: "upload" });
       setBulkResults({
         fileName: file.name,
         created,

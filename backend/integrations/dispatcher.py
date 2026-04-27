@@ -9,11 +9,19 @@ from urllib.parse import urlencode
 
 import httpx
 
-from common.models import IncidentAnalysis
+from common.models import (
+    GuardrailReport,
+    IncidentAnalysis,
+    IncidentSummary,
+    RemediationPlan,
+    RootCauseAnalysis,
+)
 
 logger = logging.getLogger(__name__)
 
 _TIMEOUT = httpx.Timeout(12.0, connect=5.0)
+# Some webhook receivers reject requests with no User-Agent; Slack accepts explicit JSON clients.
+_OUTBOUND_HEADERS = {"User-Agent": "Sentinel-integrations/1.0"}
 
 
 def _webhook_placeholder_error(url: str) -> str | None:
@@ -111,7 +119,7 @@ def _post_slack(
         lines.append(f"<{dash}|Open in Sentinel dashboard>")
     text = "\n".join(lines)
     body = {"text": text[:15000]}
-    with httpx.Client(timeout=_TIMEOUT) as client:
+    with httpx.Client(timeout=_TIMEOUT, headers=_OUTBOUND_HEADERS) as client:
         r = client.post(url, json=body)
         r.raise_for_status()
 
@@ -139,8 +147,9 @@ def _post_generic(
     auth_val = (config.get("auth_header_value") or "").strip()
     if auth and auth_val:
         headers[auth] = auth_val
-    with httpx.Client(timeout=_TIMEOUT) as client:
-        r = client.post(url, json=payload, headers=headers or None)
+    merged = {**_OUTBOUND_HEADERS, **headers}
+    with httpx.Client(timeout=_TIMEOUT, headers=merged) as client:
+        r = client.post(url, json=payload)
         r.raise_for_status()
 
 
@@ -174,7 +183,7 @@ def _post_pagerduty(
             ),
         },
     }
-    with httpx.Client(timeout=_TIMEOUT) as client:
+    with httpx.Client(timeout=_TIMEOUT, headers=_OUTBOUND_HEADERS) as client:
         r = client.post("https://events.pagerduty.com/v2/enqueue", json=body)
         r.raise_for_status()
 
@@ -191,7 +200,7 @@ def dispatch_all(
         if not row.get("enabled", True):
             continue
         config = row.get("config") or {}
-        itype = row.get("type") or ""
+        itype = (row.get("type") or "").strip().lower()
         try:
             if itype == "slack":
                 _post_slack(
@@ -200,6 +209,7 @@ def dispatch_all(
                     incident_title=incident_title,
                     incident_source=incident_source,
                 )
+                logger.info("Slack integration delivered job_id=%s", analysis.job_id)
             elif itype == "generic_webhook":
                 _post_generic(
                     config,
@@ -207,6 +217,7 @@ def dispatch_all(
                     incident_title=incident_title,
                     incident_source=incident_source,
                 )
+                logger.info("Generic webhook delivered job_id=%s", analysis.job_id)
             elif itype == "pagerduty":
                 _post_pagerduty(
                     config,
@@ -214,9 +225,53 @@ def dispatch_all(
                     incident_title=incident_title,
                     incident_source=incident_source,
                 )
+                logger.info("PagerDuty integration delivered job_id=%s", analysis.job_id)
             elif itype in ("jira", "opsgenie"):
                 logger.info("Integration type %s is saved but outbound dispatch is not implemented", itype)
             else:
-                logger.warning("Unknown integration type: %s", itype)
+                logger.warning("Unknown integration type: %r (normalized from row)", itype)
+        except httpx.HTTPStatusError as exc:
+            snippet = (exc.response.text or "")[:800]
+            logger.error(
+                "Integration HTTP error type=%s url=%s status=%s body=%r",
+                itype,
+                getattr(exc.request, "url", None),
+                exc.response.status_code,
+                snippet,
+            )
+        except httpx.RequestError as exc:
+            logger.error(
+                "Integration request failed type=%s (%s). "
+                "If this runs in AWS, ensure the Lambda/VPC has outbound internet (NAT) for HTTPS.",
+                itype,
+                exc,
+            )
         except Exception:
             logger.exception("Integration dispatch failed type=%s", itype)
+
+
+def synthetic_test_analysis() -> IncidentAnalysis:
+    """Minimal high-severity analysis for CLI smoke tests (``integrations.manual_dispatch``)."""
+    return IncidentAnalysis(
+        incident_id="sentinel-test-ping",
+        job_id="sentinel-test-ping",
+        summary=IncidentSummary(
+            summary="This is a Sentinel manual webhook smoke test — not a real incident.",
+            severity="high",
+            severity_reason="Synthetic payload to verify your webhook URL.",
+        ),
+        root_cause=RootCauseAnalysis(
+            likely_root_cause="N/A (test only)",
+            confidence="low",
+            reasoning="sentinel_test_ping",
+        ),
+        remediation=RemediationPlan(
+            recommended_actions=["If you received this, outbound delivery works."],
+            next_checks=["Run a real Analyze job to receive live incident payloads."],
+            risk_if_unresolved="None (test only)",
+            recommended_severities=["low"],
+            check_severities=["low"],
+        ),
+        guardrails=GuardrailReport(),
+        models={"support": "test_ping", "root_cause": "test_ping", "remediation": "test_ping"},
+    )

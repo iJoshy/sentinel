@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import AppShell from "../components/AppShell";
 import { deleteIntegration, fetchIntegrations, saveIntegration } from "../lib/api";
+import { SkeletonRect, SkeletonText, SkeletonTitle } from "../components/Skeleton";
 import { isClerkEnabled } from "../lib/clerk";
 
 const clerkEnabled = isClerkEnabled();
@@ -27,7 +28,7 @@ const INTEGRATION_TYPES = [
   { value: "generic_webhook", label: "Generic Webhook", fields: [{ key: "webhook_url", label: "Webhook URL", placeholder: "https://…" }] },
 ];
 
-function IntegrationForm({ onSave }) {
+function IntegrationForm({ onSave, loading }) {
   const [type, setType] = useState("slack");
   const [config, setConfig] = useState({});
   const [saving, setSaving] = useState(false);
@@ -50,6 +51,19 @@ function IntegrationForm({ onSave }) {
     } finally {
       setSaving(false);
     }
+  }
+
+  if (loading) {
+    return (
+      <div className="card-elevated" style={{ padding: "20px 24px", marginBottom: 24 }}>
+        <SkeletonTitle />
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, marginTop: 12 }}>
+          <SkeletonRect height={38} />
+          <SkeletonRect height={38} />
+          <SkeletonRect height={42} style={{ width: 140 }} />
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -91,9 +105,12 @@ function IntegrationForm({ onSave }) {
 
 function SettingsContent({ tokenProvider = null }) {
   const [integrations, setIntegrations] = useState([]);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
     try {
       const token = tokenProvider ? await tokenProvider() : null;
       if (tokenProvider && !token) {
@@ -101,15 +118,18 @@ function SettingsContent({ tokenProvider = null }) {
         return;
       }
       const data = await fetchIntegrations(token);
-      setIntegrations(data);
+      setIntegrations(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message || "Failed to load integrations");
+    } finally {
+      setLoading(false);
     }
   }, [tokenProvider]);
 
   useEffect(() => { load(); }, [load]);
 
   async function handleSave(payload) {
+    setError("");
     const token = tokenProvider ? await tokenProvider() : null;
     if (tokenProvider && !token) {
       setError("Could not get a session token. Try refreshing the page.");
@@ -120,6 +140,7 @@ function SettingsContent({ tokenProvider = null }) {
   }
 
   async function handleDelete(id) {
+    setError("");
     try {
       const token = tokenProvider ? await tokenProvider() : null;
       if (tokenProvider && !token) {
@@ -127,7 +148,7 @@ function SettingsContent({ tokenProvider = null }) {
         return;
       }
       await deleteIntegration(id, token);
-      setIntegrations((prev) => prev.filter((i) => i.id !== id));
+      setIntegrations((prev) => prev.filter((i) => (i.id || i.integration_id) !== id));
     } catch (err) {
       setError(err.message || "Failed to delete");
     }
@@ -146,19 +167,22 @@ function SettingsContent({ tokenProvider = null }) {
       {error ? <p className="error compact" style={{ marginBottom: 16 }}>{error}</p> : null}
 
       <h2 style={{ marginBottom: 16 }}>Integrations</h2>
-      <p className="muted small" style={{ marginBottom: 16 }}>
-        When a high or critical incident is detected, Sentinel will automatically notify configured integrations.
-      </p>
 
-      <IntegrationForm onSave={handleSave} />
+      <IntegrationForm onSave={handleSave} loading={loading} />
 
-      {integrations.length === 0 ? (
+      {loading ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {[1, 2, 3].map((i) => (
+            <SkeletonRect key={i} height={60} style={{ borderRadius: "var(--radius, 12px)" }} />
+          ))}
+        </div>
+      ) : integrations.length === 0 ? (
         <p className="muted small">No integrations configured yet.</p>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {integrations.map((int) => (
             <div
-              key={int.id}
+              key={int.id || int.integration_id}
               className="card-elevated"
               style={{
                 padding: "14px 18px",
@@ -191,7 +215,7 @@ function SettingsContent({ tokenProvider = null }) {
                 type="button"
                 className="btn btn-muted"
                 style={{ color: "var(--danger)", borderColor: "var(--danger)" }}
-                onClick={() => handleDelete(int.id)}
+                onClick={() => handleDelete(int.id || int.integration_id)}
               >
                 Remove
               </button>

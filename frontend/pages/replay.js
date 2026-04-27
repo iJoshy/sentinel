@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import AppShell from "../components/AppShell";
 import ReplayPlayer from "../components/ReplayPlayer";
+import { SkeletonRect, SkeletonText, SkeletonTitle } from "../components/Skeleton";
 import { explainReplayFrame, fetchJobs, fetchReplay } from "../lib/api";
 import { isClerkEnabled } from "../lib/clerk";
 
@@ -23,7 +24,8 @@ function runLabel(row) {
 }
 
 function ReplayContent({ tokenProvider = null }) {
-  const [jobs, setJobs] = useState([]);
+  const [jobRows, setJobRows] = useState([]);
+  const [loadingJobs, setLoadingJobs] = useState(false);
   const [jobId, setJobId] = useState("");
   const [replay, setReplay] = useState(null);
   const [err, setErr] = useState("");
@@ -32,13 +34,16 @@ function ReplayContent({ tokenProvider = null }) {
   const [explainByIndex, setExplainByIndex] = useState({});
 
   const loadJobs = useCallback(async () => {
+    setLoadingJobs(true);
+    setErr("");
     try {
-      setErr("");
       const token = tokenProvider ? await tokenProvider() : null;
       const rows = await fetchJobs(50, token);
-      setJobs(rows);
+      setJobRows(rows);
     } catch (e) {
       setErr(e.message || "Failed to load job list");
+    } finally {
+      setLoadingJobs(false);
     }
   }, [tokenProvider]);
 
@@ -46,7 +51,7 @@ function ReplayContent({ tokenProvider = null }) {
     loadJobs();
   }, [loadJobs]);
 
-  const completed = jobs.filter((r) => r.status === "completed");
+  const completed = jobRows.filter((r) => r.status === "completed");
 
   const loadReplay = useCallback(async (id) => {
     if (!id) {
@@ -71,6 +76,7 @@ function ReplayContent({ tokenProvider = null }) {
   async function onExplainFrame(frameIndex) {
     if (!jobId) return;
     setExplainingIndex(frameIndex);
+    setErr("");
     try {
       const token = tokenProvider ? await tokenProvider() : null;
       const res = await explainReplayFrame(jobId, frameIndex, token);
@@ -98,23 +104,27 @@ function ReplayContent({ tokenProvider = null }) {
         <div className="row gap" style={{ flexWrap: "wrap", alignItems: "flex-end", gap: 12 }}>
           <label className="dashboard-filter-label" style={{ flex: "1 1 340px", margin: 0 }}>
             <span className="muted small" style={{ display: "block", marginBottom: 6 }}>Run</span>
-            <select
-              className="input"
-              value={jobId}
-              onChange={(e) => {
-                const v = e.target.value;
-                setJobId(v);
-                void loadReplay(v);
-              }}
-              style={{ width: "100%", marginTop: 0 }}
-            >
-              <option value="">{completed.length ? "Choose a completed run…" : "No completed runs yet"}</option>
-              {completed.map((row) => (
-                <option key={row.job_id} value={row.job_id}>
-                  {runLabel(row)}
-                </option>
-              ))}
-            </select>
+            {loadingJobs ? (
+              <SkeletonRect height={38} style={{ width: "100%", borderRadius: 8 }} />
+            ) : (
+              <select
+                className="input"
+                value={jobId}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setJobId(v);
+                  void loadReplay(v);
+                }}
+                style={{ width: "100%", marginTop: 0 }}
+              >
+                <option value="">{completed.length ? "Choose a completed run…" : "No completed runs yet"}</option>
+                {completed.map((row) => (
+                  <option key={row.job_id} value={row.job_id}>
+                    {runLabel(row)}
+                  </option>
+                ))}
+              </select>
+            )}
           </label>
 
           <button type="button" className="btn btn-muted" onClick={loadJobs}>
@@ -124,9 +134,23 @@ function ReplayContent({ tokenProvider = null }) {
       </div>
 
       {err ? <p className="error compact">{err}</p> : null}
-      {loading ? <p className="muted small">Loading replay…</p> : null}
-
-      {!loading && replay ? (
+      
+      {loading ? (
+        <div className="card-elevated" style={{ padding: "24px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 20 }}>
+            <SkeletonTitle />
+            <div className="skeleton" style={{ width: 100, height: 32, borderRadius: 20 }} />
+          </div>
+          <SkeletonRect height={240} style={{ marginBottom: 20 }} />
+          <div style={{ display: "flex", gap: 12 }}>
+            <div className="skeleton" style={{ width: 80, height: 32, borderRadius: 6 }} />
+            <div className="skeleton" style={{ flex: 1, height: 32, borderRadius: 6 }} />
+          </div>
+          <div style={{ marginTop: 24 }}>
+            <SkeletonText lines={5} />
+          </div>
+        </div>
+      ) : replay ? (
         <ReplayPlayer
           replay={replay}
           onExplainFrame={onExplainFrame}

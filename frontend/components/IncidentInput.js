@@ -149,27 +149,32 @@ export default function IncidentInput({
         >
           <option value="manual">Manual paste</option>
           <option value="upload">File upload</option>
-          <option value="monitoring">Monitoring export</option>
         </select>
       </label>
-      <label>
-        Paste Logs / Incident Text
-        <textarea
-          className="input textarea"
-          value={draft.text}
-          onChange={(e) => {
-            const text = e.target.value;
-            // After ZIP bulk we set source to "upload"; typing/pasting new logs is a manual run.
-            if (draft.source === "upload") {
-              onDraftChange({ text, source: "manual" });
-            } else {
-              onDraftChange({ text });
+      {(draft.source === "manual" || draft.source === "upload") && (
+        <label>
+          {draft.source === "upload" ? "File Content" : "Paste Logs / Incident Text"}
+          <textarea
+            className="input textarea"
+            value={draft.text}
+            onChange={(e) => {
+              const text = e.target.value;
+              // If we were in upload mode but user starts typing, switch to manual.
+              if (draft.source === "upload") {
+                onDraftChange({ text, source: "manual" });
+              } else {
+                onDraftChange({ text });
+              }
+            }}
+            placeholder={
+              draft.source === "upload"
+                ? "Select a file to see its content here..."
+                : "2024-04-23T08:12:44Z ERROR database connection refused...\n2024-04-23T08:12:50Z CRITICAL panic: runtime error...\n\nPaste logs, stack trace, and context here..."
             }
-          }}
-          placeholder={"2024-04-23T08:12:44Z ERROR database connection refused...\n2024-04-23T08:12:50Z CRITICAL panic: runtime error...\n\nPaste logs, stack trace, and context here..."}
-          required
-        />
-      </label>
+            required
+          />
+        </label>
+      )}
 
       {showWarning && (
         <div
@@ -256,10 +261,11 @@ export default function IncidentInput({
           type="button"
           className="btn btn-muted"
           onClick={() => fileRef.current?.click()}
-          disabled={bulkLoading}
+          disabled={bulkLoading || loading}
         >
           Upload .txt or .json
         </button>
+
         <input
           ref={fileRef}
           type="file"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 
 from common.config import active_model
@@ -16,6 +17,17 @@ from remediator.agent import generate_remediation
 from summarizer.agent import summarize_incident
 
 logger = logging.getLogger(__name__)
+
+_VALID_SEVERITIES = frozenset({"low", "medium", "high", "critical"})
+
+
+def _integration_notify_severities() -> frozenset[str]:
+    """Comma-separated severities that trigger outbound integrations (default: high,critical)."""
+    raw = (os.getenv("INTEGRATION_NOTIFY_SEVERITIES", "high,critical") or "").strip()
+    raw = raw.strip('"').strip("'")
+    parts = {p.strip().lower() for p in raw.split(",") if p.strip()}
+    chosen = parts & _VALID_SEVERITIES
+    return frozenset(chosen) if chosen else frozenset({"high", "critical"})
 
 
 def _build_action_scorecard(
@@ -220,16 +232,23 @@ def run_job(
             logger.warning("Failed to seed remediation actions; continuing")
 
         try:
+            owner = str(row.get("clerk_user_id") or "").strip()
+            param_uid = (clerk_user_id or "").strip()
+            if not owner:
+                owner = param_uid or "anonymous"
+                param_uid = ""
+            alternate = param_uid if param_uid and param_uid != owner else None
             _fire_integrations(
                 job_id,
                 analysis,
                 db,
-                clerk_user_id or row.get("clerk_user_id") or "anonymous",
+                owner,
                 incident_title=str(row.get("title") or "").strip(),
                 incident_source=str(row.get("source") or "").strip(),
+                alternate_user_id=alternate,
             )
         except Exception:  # noqa: BLE001
-            logger.warning("Integration dispatch failed; continuing")
+            logger.exception("Integration dispatch failed for job_id=%s; continuing", job_id)
 
         db.set_job_stage(job_id, "completed", "Analysis ready")
         return JobRunResponse(
@@ -265,21 +284,60 @@ def _fire_integrations(
     *,
     incident_title: str = "",
     incident_source: str = "",
+    alternate_user_id: str | None = None,
 ) -> None:
     """Dispatch configured integrations if analysis severity warrants it.
 
     Pass ``incident_title`` / ``incident_source`` from the job row (``get_job_with_incident``)
     so webhooks always get the correct label without a second DB lookup that can fail on
     tenant id mismatches (e.g. Lambda ``run_job(job_id, db)`` with no Clerk context).
+
+    If ``alternate_user_id`` is set (e.g. API caller id differs from the job row owner),
+    integrations for both users are merged so Slack/webhooks saved under either id still run.
     """
     from integrations.dispatcher import dispatch_all
 
-    integrations = db.list_integrations(clerk_user_id)
+    user_ids: list[str] = []
+    if clerk_user_id:
+        user_ids.append(clerk_user_id)
+    if alternate_user_id and alternate_user_id not in user_ids:
+        user_ids.append(alternate_user_id)
+
+    seen: set[str] = set()
+    integrations: list[dict] = []
+    for uid in user_ids:
+        for row in db.list_integrations(uid):
+            rid = row.get("id")
+            if rid:
+                if rid in seen:
+                    continue
+                seen.add(rid)
+            integrations.append(row)
+
     if not integrations:
+        logger.info(
+            "Outbound integrations skipped job_id=%s: no integrations for user_ids=%s",
+            job_id,
+            user_ids,
+        )
         return
-    severity = analysis.summary.severity
-    if severity not in _integration_notify_severities():
+    severity = str(analysis.summary.severity or "medium").strip().lower()
+    notify = _integration_notify_severities()
+    if severity not in notify:
+        logger.info(
+            "Outbound integrations skipped job_id=%s: severity=%s not in INTEGRATION_NOTIFY_SEVERITIES (%s)",
+            job_id,
+            severity,
+            ",".join(sorted(notify)),
+        )
         return
+    logger.info(
+        "Dispatching outbound integrations job_id=%s user_ids=%s severity=%s count=%s",
+        job_id,
+        user_ids,
+        severity,
+        len(integrations),
+    )
     dispatch_all(
         integrations,
         analysis,
