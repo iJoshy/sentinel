@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "sentinel-center",
+    "backend": "etcy-systems-prod"
+  },
+  "targets": {
+    "sentinel-center": {
+      "hosting": {
+        "sentinel": [
+          "sentinel-center"
+        ]
+      }
+    }
+  }
+}

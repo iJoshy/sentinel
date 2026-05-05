@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -16,6 +18,13 @@ from common.config import (
     aurora_database,
     aurora_region,
     aurora_secret_arn,
+    gcp_cloudsql_connection_name,
+    gcp_db_host,
+    gcp_db_name,
+    gcp_db_password,
+    gcp_db_port,
+    gcp_db_user,
+    gcp_postgres_configured,
     is_local,
     sqlite_path,
 )
@@ -1616,6 +1625,183 @@ class Database(_SentinelDb):
 
 
 # ---------------------------------------------------------------------------
+# PostgreSQL backend (GCP Cloud SQL / direct Postgres)
+# ---------------------------------------------------------------------------
+
+
+class PostgresDatabase(_SentinelDb):
+    """PostgreSQL backend for GCP Cloud SQL.
+
+    Cloud Run connects through the Cloud SQL Unix socket at
+    ``/cloudsql/{connection_name}``. Local smoke tests can use ``DATABASE_URL``
+    or ``GCP_DB_HOST`` / ``GCP_DB_PORT``.
+    """
+
+    _PARAM_RE = re.compile(r"(?<!:):([A-Za-z_][A-Za-z0-9_]*)")
+
+    def __init__(self) -> None:
+        self._connector = None
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:  # pragma: no cover - environment/setup issue
+            raise RuntimeError(
+                "psycopg is required for the GCP Cloud SQL/Postgres backend."
+            ) from exc
+
+        self._psycopg = psycopg
+        database_url = os.getenv("DATABASE_URL", "").strip()
+        connection_name = gcp_cloudsql_connection_name()
+        use_connector = (
+            connection_name
+            and os.getenv("GCP_USE_CLOUDSQL_CONNECTOR", "true").lower() == "true"
+            and not database_url
+        )
+        self._driver = "psycopg"
+        if use_connector:
+            try:
+                from google.cloud.sql.connector import Connector
+
+                self._connector = Connector(refresh_strategy="LAZY")
+                self._conn = self._connector.connect(
+                    connection_name,
+                    "pg8000",
+                    user=gcp_db_user(),
+                    password=gcp_db_password(),
+                    db=gcp_db_name(),
+                    ip_type=os.getenv("GCP_CLOUDSQL_IP_TYPE", "public"),
+                )
+                self._driver = "pg8000"
+            except ImportError as exc:  # pragma: no cover - environment/setup issue
+                raise RuntimeError(
+                    "cloud-sql-python-connector[pg8000] is required for Cloud SQL connector mode."
+                ) from exc
+        elif database_url:
+            kwargs: dict[str, Any] = {"row_factory": dict_row}
+            self._conn = psycopg.connect(database_url, **kwargs)
+        else:
+            kwargs = {"row_factory": dict_row}
+            host = f"/cloudsql/{connection_name}" if connection_name else gcp_db_host()
+            self._conn = psycopg.connect(
+                dbname=gcp_db_name(),
+                user=gcp_db_user(),
+                password=gcp_db_password(),
+                host=host,
+                port=gcp_db_port(),
+                **kwargs,
+            )
+        self._lock = threading.Lock()
+
+    @classmethod
+    def _sql(cls, sql: str) -> str:
+        return cls._PARAM_RE.sub(r"%(\1)s", sql)
+
+    @classmethod
+    def _pg8000_sql(
+        cls, sql: str, params: dict[str, Any] | None
+    ) -> tuple[str, list[Any]]:
+        values: list[Any] = []
+
+        def repl(match: re.Match[str]) -> str:
+            key = match.group(1)
+            values.append((params or {}).get(key))
+            return "%s"
+
+        return cls._PARAM_RE.sub(repl, sql), values
+
+    def _query(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        del transaction_id
+        with self._lock:
+            with self._conn.cursor() as cur:
+                if self._driver == "pg8000":
+                    q, values = self._pg8000_sql(sql, params)
+                    cur.execute(q, values)
+                    columns = [col[0] for col in cur.description or []]
+                    return [dict(zip(columns, row)) for row in cur.fetchall()]
+                cur.execute(self._sql(sql), params or {})
+                return [dict(row) for row in cur.fetchall()]
+
+    def _query_one(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        del transaction_id
+        with self._lock:
+            with self._conn.cursor() as cur:
+                if self._driver == "pg8000":
+                    q, values = self._pg8000_sql(sql, params)
+                    cur.execute(q, values)
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    columns = [col[0] for col in cur.description or []]
+                    return dict(zip(columns, row))
+                cur.execute(self._sql(sql), params or {})
+                row = cur.fetchone()
+                return dict(row) if row else None
+
+    def _execute(
+        self,
+        sql: str,
+        params: dict[str, Any] | None = None,
+        *,
+        transaction_id: str | None = None,
+    ) -> int:
+        del transaction_id
+        with self._lock:
+            if self._driver == "pg8000":
+                try:
+                    with self._conn.cursor() as cur:
+                        q, values = self._pg8000_sql(sql, params)
+                        cur.execute(q, values)
+                        rowcount = int(cur.rowcount or 0)
+                    self._conn.commit()
+                    return rowcount
+                except Exception:
+                    self._conn.rollback()
+                    raise
+            with self._conn.transaction():
+                with self._conn.cursor() as cur:
+                    cur.execute(self._sql(sql), params or {})
+                    return int(cur.rowcount or 0)
+
+    def execute_script(self, statements: list[str]) -> None:
+        with self._lock:
+            if self._driver == "pg8000":
+                try:
+                    with self._conn.cursor() as cur:
+                        for statement in statements:
+                            sql = statement.strip()
+                            if sql:
+                                cur.execute(sql)
+                    self._conn.commit()
+                except Exception:
+                    self._conn.rollback()
+                    raise
+                return
+            with self._conn.transaction():
+                with self._conn.cursor() as cur:
+                    for statement in statements:
+                        sql = statement.strip()
+                        if sql:
+                            cur.execute(sql)
+
+    def close(self) -> None:
+        self._conn.close()
+        if self._connector is not None:
+            self._connector.close()
+
+
+# ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
 
@@ -1624,4 +1810,6 @@ def get_database() -> _SentinelDb:
     """Return a SqliteDatabase locally or an Aurora Database in production."""
     if is_local():
         return SqliteDatabase()
+    if gcp_postgres_configured():
+        return PostgresDatabase()
     return Database()

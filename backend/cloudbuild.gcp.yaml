@@ -1,0 +1,19 @@
+substitutions:
+  _IMAGE: europe-west1-docker.pkg.dev/etcy-systems-prod/sentinel/sentinel-api:latest
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.gcp
+      - -t
+      - ${_IMAGE}
+      - .
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_IMAGE}
+
+images:
+  - ${_IMAGE}

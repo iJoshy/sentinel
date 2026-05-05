@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "your-gcp-project-id"
+  },
+  "targets": {
+    "your-gcp-project-id": {
+      "hosting": {
+        "sentinel": [
+          "your-unique-firebase-site-id"
+        ]
+      }
+    }
+  }
+}

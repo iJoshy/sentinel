@@ -20,6 +20,8 @@ def isolated_local_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     db_path = tmp_path / "sentinel-test.db"
     monkeypatch.delenv("AURORA_CLUSTER_ARN", raising=False)
     monkeypatch.delenv("AURORA_SECRET_ARN", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("GCP_CLOUDSQL_CONNECTION_NAME", raising=False)
     monkeypatch.setenv("LOCAL_DB_PATH", str(db_path))
     return db_path
 
@@ -35,7 +37,13 @@ def disable_llm_backends(monkeypatch: pytest.MonkeyPatch) -> None:
     """Prevent accidental calls to real model providers in unit tests."""
     monkeypatch.setenv("USE_BEDROCK", "false")
     monkeypatch.setenv("USE_OPEN_ROUTER", "false")
+    monkeypatch.setenv("USE_VERTEX_AI", "false")
+    monkeypatch.delenv("PUBSUB_JOBS_TOPIC", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("PUSHOVER_TOKEN", raising=False)
+    monkeypatch.delenv("PUSHOVER_USER", raising=False)
+    monkeypatch.delenv("PUSHOVER_USER_KEY", raising=False)
+    monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
     monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
     monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)

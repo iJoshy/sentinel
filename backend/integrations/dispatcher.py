@@ -188,6 +188,47 @@ def _post_pagerduty(
         r.raise_for_status()
 
 
+def _post_pushover(
+    config: dict[str, Any],
+    analysis: IncidentAnalysis,
+    *,
+    incident_title: str = "",
+    incident_source: str = "",
+) -> None:
+    token = (config.get("token") or os.getenv("PUSHOVER_TOKEN") or "").strip()
+    user_key = (
+        config.get("user_key")
+        or os.getenv("PUSHOVER_USER_KEY")
+        or os.getenv("PUSHOVER_USER")
+        or ""
+    ).strip()
+    if not token or not user_key:
+        logger.warning("Pushover integration missing token or user_key")
+        return
+    title = incident_title.strip() or f"Sentinel {analysis.summary.severity.upper()} incident"
+    message_parts = [
+        analysis.summary.summary,
+        f"Root cause: {analysis.root_cause.likely_root_cause}",
+    ]
+    dash = _public_job_url(analysis.job_id)
+    if dash:
+        message_parts.append(dash)
+    priority = 1 if analysis.summary.severity in {"high", "critical"} else 0
+    payload = {
+        "token": token,
+        "user": user_key,
+        "title": title[:250],
+        "message": "\n".join(message_parts)[:1024],
+        "priority": priority,
+    }
+    if dash:
+        payload["url"] = dash
+        payload["url_title"] = "Open Sentinel job"
+    with httpx.Client(timeout=_TIMEOUT, headers=_OUTBOUND_HEADERS) as client:
+        r = client.post("https://api.pushover.net/1/messages.json", data=payload)
+        r.raise_for_status()
+
+
 def dispatch_all(
     integrations: list[dict[str, Any]],
     analysis: IncidentAnalysis,
@@ -226,6 +267,14 @@ def dispatch_all(
                     incident_source=incident_source,
                 )
                 logger.info("PagerDuty integration delivered job_id=%s", analysis.job_id)
+            elif itype == "pushover":
+                _post_pushover(
+                    config,
+                    analysis,
+                    incident_title=incident_title,
+                    incident_source=incident_source,
+                )
+                logger.info("Pushover integration delivered job_id=%s", analysis.job_id)
             elif itype in ("jira", "opsgenie"):
                 logger.info("Integration type %s is saved but outbound dispatch is not implemented", itype)
             else:

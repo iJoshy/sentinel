@@ -314,6 +314,19 @@ def _fire_integrations(
                 seen.add(rid)
             integrations.append(row)
 
+    if os.getenv("PUSHOVER_TOKEN", "").strip() and (
+        os.getenv("PUSHOVER_USER_KEY", "").strip()
+        or os.getenv("PUSHOVER_USER", "").strip()
+    ):
+        integrations.append(
+            {
+                "id": "env-pushover",
+                "enabled": True,
+                "type": "pushover",
+                "config": {},
+            }
+        )
+
     if not integrations:
         logger.info(
             "Outbound integrations skipped job_id=%s: no integrations for user_ids=%s",

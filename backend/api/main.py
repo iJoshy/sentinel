@@ -54,6 +54,7 @@ from common.models import (
 from common.audit_pdf import render_audit_classic_pdf
 from common.pdf_report import render_job_pdf
 from common.pipeline import create_incident_and_job, parse_analysis, run_job
+from common.queue import enqueue_job
 from common.scheduler import ReminderScheduler
 from common.store import Database, get_database
 from investigator.agent import parse_streamed_root_cause, stream_investigation_text
@@ -68,7 +69,8 @@ if load_dotenv is not None:
     # Prefer repo-root `.env` (same file `scripts/run_local.py` documents).
     _api_dir = Path(__file__).resolve().parent
     # Prefer repo-root `.env`, then `backend/.env` (if present).
-    for _base in (_api_dir.parents[2], _api_dir.parents[1]):
+    _candidate_bases = list(_api_dir.parents)
+    for _base in (_candidate_bases[2:3] + _candidate_bases[1:2] + _candidate_bases[:1]):
         _env = _base / ".env"
         if _env.is_file():
             load_dotenv(_env)
@@ -419,6 +421,21 @@ def _background_run_job(job_id: str, clerk_user_id: str) -> None:
     run_job(job_id, db=None, clerk_user_id=clerk_user_id)
 
 
+def _dispatch_job(
+    job_id: str, clerk_user_id: str, background_tasks: BackgroundTasks | None = None
+) -> None:
+    if enqueue_job(job_id):
+        return
+    if background_tasks is not None:
+        background_tasks.add_task(_background_run_job, job_id, clerk_user_id)
+        return
+    import threading
+
+    threading.Thread(
+        target=run_job, args=(job_id, None, clerk_user_id), daemon=True
+    ).start()
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "sentinel-api"}
@@ -568,7 +585,7 @@ def create_incident(
         incident_id, job_id = create_incident_and_job(
             payload, db, clerk_user_id=user.user_id
         )
-        background_tasks.add_task(_background_run_job, job_id, user.user_id)
+        _dispatch_job(job_id, user.user_id, background_tasks)
         return JobCreateResponse(
             incident_id=incident_id, job_id=job_id, status="pending"
         )
@@ -746,7 +763,7 @@ async def create_incidents_bulk_zip(
                 incident_id, job_id = create_incident_and_job(
                     payload, db, clerk_user_id=user.user_id
                 )
-                background_tasks.add_task(_background_run_job, job_id, user.user_id)
+                _dispatch_job(job_id, user.user_id, background_tasks)
                 created.append({"file": name, "incident_id": incident_id, "job_id": job_id})
                 queued += 1
 
@@ -1616,11 +1633,7 @@ def _ingest_webhook_payload(
         incident_id, job_id = create_incident_and_job(
             incident_input, db, clerk_user_id=user_id
         )
-        import threading
-
-        threading.Thread(
-            target=run_job, args=(job_id, None, user_id), daemon=True
-        ).start()
+        _dispatch_job(job_id, user_id)
         return {"incident_id": incident_id, "job_id": job_id, "status": "pending"}
     finally:
         db.close()

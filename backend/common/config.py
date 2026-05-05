@@ -18,8 +18,11 @@ if load_dotenv is not None:
 
 
 def is_local() -> bool:
-    """Return True when running outside AWS (no Aurora ARNs configured)."""
-    return not (os.getenv("AURORA_CLUSTER_ARN", "").strip() and os.getenv("AURORA_SECRET_ARN", "").strip())
+    """Return True when no production database backend is configured."""
+    return not (
+        os.getenv("AURORA_CLUSTER_ARN", "").strip()
+        and os.getenv("AURORA_SECRET_ARN", "").strip()
+    ) and not gcp_postgres_configured()
 
 
 def sqlite_path() -> str:
@@ -88,12 +91,80 @@ def openrouter_base_url() -> str:
     return os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
 
+def use_vertex_ai() -> bool:
+    return os.getenv("USE_VERTEX_AI", "false").lower() == "true"
+
+
+def vertex_ai_project_id() -> str:
+    return (
+        os.getenv("GCP_PROJECT_ID", "").strip()
+        or os.getenv("GOOGLE_CLOUD_PROJECT", "").strip()
+    )
+
+
+def vertex_ai_location() -> str:
+    return (
+        os.getenv("GCP_LOCATION", "").strip()
+        or os.getenv("GCP_REGION", "").strip()
+        or "us-central1"
+    )
+
+
+def vertex_ai_model() -> str:
+    return (
+        os.getenv("VERTEX_AI_MODEL", "").strip()
+        or os.getenv("GEMINI_MODEL", "").strip()
+        or "gemini-2.5-flash"
+    )
+
+
+def gcp_postgres_configured() -> bool:
+    return bool(
+        os.getenv("DATABASE_URL", "").strip()
+        or os.getenv("GCP_CLOUDSQL_CONNECTION_NAME", "").strip()
+    )
+
+
+def gcp_db_name() -> str:
+    return os.getenv("GCP_DB_NAME", os.getenv("DB_NAME", "sentinel")).strip() or "sentinel"
+
+
+def gcp_db_user() -> str:
+    return os.getenv("GCP_DB_USER", "sentinel").strip() or "sentinel"
+
+
+def gcp_db_password() -> str:
+    return os.getenv("GCP_DB_PASSWORD", "").strip()
+
+
+def gcp_cloudsql_connection_name() -> str:
+    return os.getenv("GCP_CLOUDSQL_CONNECTION_NAME", "").strip()
+
+
+def gcp_db_host() -> str:
+    return os.getenv("GCP_DB_HOST", "127.0.0.1").strip() or "127.0.0.1"
+
+
+def gcp_db_port() -> int:
+    try:
+        return int(os.getenv("GCP_DB_PORT", "5432"))
+    except ValueError:
+        return 5432
+
+
+def pubsub_jobs_topic() -> str:
+    return os.getenv("PUBSUB_JOBS_TOPIC", "").strip()
+
+
 def active_model() -> str:
     """Return the model identifier for whichever LLM backend is active.
 
     - USE_OPEN_ROUTER=true  → OPENROUTER_MODEL (default: openai/gpt-4o-mini)
     - USE_BEDROCK=true      → BEDROCK_MODEL_ID  (default: eu.amazon.nova-pro-v1:0)
+    - USE_VERTEX_AI=true    → VERTEX_AI_MODEL   (default: gemini-2.5-flash)
     """
+    if use_vertex_ai():
+        return vertex_ai_model()
     if use_openrouter():
         return openrouter_model()
     return os.getenv("BEDROCK_MODEL_ID", "eu.amazon.nova-pro-v1:0")

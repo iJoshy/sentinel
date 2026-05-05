@@ -25,6 +25,14 @@ const INTEGRATION_TYPES = [
     label: "PagerDuty",
     fields: [{ key: "routing_key", label: "Routing Key (Events v2)", placeholder: "…", secret: true }],
   },
+  {
+    value: "pushover",
+    label: "Pushover",
+    fields: [
+      { key: "token", label: "Application Token", placeholder: "Uses server secret if blank", secret: true },
+      { key: "user_key", label: "User or Group Key", placeholder: "Uses server secret if blank", secret: true },
+    ],
+  },
   { value: "generic_webhook", label: "Generic Webhook", fields: [{ key: "webhook_url", label: "Webhook URL", placeholder: "https://…" }] },
 ];
 
