@@ -1,6 +1,6 @@
 # Sentinel
 
-**Production:** [https://d2ffskcz761exz.cloudfront.net/](https://d2ffskcz761exz.cloudfront.net/)
+**Production:** [https://sentinel-center.web.app/live/](https://sentinel-center.web.app/live/)
 
 **Sentinel** is an AI-powered incident intelligence platform. It turns raw logs and incident narratives into structured analysis—summaries, severity, likely root cause, evidence-grounded remediation, and exportable reports—so teams can respond faster with less manual triage.
 
