@@ -15,7 +15,7 @@ This file is the working runbook and knowledge base for moving Sentinel from AWS
 
 Primary docs checked while planning:
 
-- Cloud Run can connect to Cloud SQL via `/cloudsql/INSTANCE_CONNECTION_NAME`; the current runtime uses the Cloud SQL Python Connector for both Cloud Run and Cloud Functions: https://cloud.google.com/sql/docs/postgres/connect-run and https://cloud.google.com/sql/docs/postgres/connect-functions
+- Cloud Run can connect to Cloud SQL via `/cloudsql/INSTANCE_CONNECTION_NAME`; the API uses this mounted socket, while the Cloud Function worker uses the Cloud SQL Python Connector: https://cloud.google.com/sql/docs/postgres/connect-run and https://cloud.google.com/sql/docs/postgres/connect-functions
 - Firebase Hosting deploys static assets from a configured public directory: https://firebase.google.com/docs/hosting
 - Pub/Sub supports dead-letter topics for failed delivery attempts: https://cloud.google.com/pubsub/docs/dead-letter-topics
 - Vertex AI Gemini model calls use the Vertex AI publisher model endpoint: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/inference
@@ -34,7 +34,8 @@ Primary docs checked while planning:
 ## Runtime Changes
 
 - `USE_VERTEX_AI=true` routes model calls to Vertex AI Gemini.
-- `GCP_CLOUDSQL_CONNECTION_NAME` selects the new Postgres/Cloud SQL store through the Cloud SQL Python Connector.
+- `GCP_CLOUDSQL_CONNECTION_NAME` selects the new Postgres/Cloud SQL store.
+- `GCP_USE_CLOUDSQL_CONNECTOR=false` on Cloud Run makes the API use the mounted `/cloudsql` Unix socket; the Pub/Sub Cloud Function keeps `GCP_USE_CLOUDSQL_CONNECTOR=true`.
 - The Artifact Registry Docker repository is treated as pre-existing because the image build step creates or uses it before Terraform apply.
 - `PUBSUB_JOBS_TOPIC` makes `POST /api/incidents` publish jobs instead of only using local FastAPI background tasks.
 - `SENDGRID_API_KEY` enables SendGrid follow-up reminder email; Resend remains as fallback.
@@ -163,12 +164,27 @@ Primary docs checked while planning:
 
    Then open the Firebase Hosting URL, sign in with Clerk, submit one incident, and confirm the job completes.
 
+## Troubleshooting Notes
+
+- If authenticated tabs show `Failed to fetch` in Chrome or `NetworkError when attempting to fetch resource` in Firefox, inspect the failed request in DevTools. A `500` from `https://sentinel-api-a4syzwgvmq-ew.a.run.app` is a backend error, not a frontend CORS error.
+- On 2026-05-05, `/api/reports/digest` and `/api/jobs` returned `500` because the Cloud SQL connector uses `pg8000`, whose cursor does not support context-manager syntax. `backend/common/store.py` now closes pg8000 cursors explicitly, and `backend/tests/test_gcp_runtime.py` covers this behavior.
+- Cloud Run revision `sentinel-api-00004-ljm` was deployed with image `europe-west1-docker.pkg.dev/etcy-systems-prod/sentinel/sentinel-api:api-pg8000-cursor-fix-20260505091844`.
+- Cloud Run API database access now uses the mounted Cloud SQL socket. This avoids connector startup/network errors in the always-on reminder scheduler thread.
+- On 2026-05-05, Analyze jobs appeared to hang after submission because the Pub/Sub Cloud Function worker was invoked as `pubsub_run_job(data, context)`, but the handler only accepted one CloudEvent argument. `backend/gcp_function.py` now accepts both signatures. Deploy with `cd terraform/gcp && terraform apply` so the worker source archive is refreshed.
+- The Analyze frontend stream now has a client-side timeout guard. If a future worker issue leaves a job non-terminal, the UI falls back to polling and eventually shows an explicit timeout instead of waiting silently.
+- The old AWS API Gateway URL should not appear in Firebase bundles. Check deployed static chunks with:
+
+  ```bash
+  curl -s 'https://sentinel-center.web.app/_next/static/chunks/pages/_app-*.js' \
+    | rg 'execute-api|sentinel-api'
+  ```
+
 ## Cost Controls
 
 - Cloud Run API: `min_instance_count = 0`, `max_instance_count = 3`, `cpu_idle = true`.
 - Cloud Function worker: `min_instance_count = 0`, `max_instance_count = 2`.
 - Cloud SQL: default `db-f1-micro`, zonal, 10 GB HDD, backups disabled for the initial cost-focused migration.
-- Pub/Sub retention is one day and DLQ max delivery attempts is three.
+- Pub/Sub retention is one day and DLQ max delivery attempts is five, which is the current GCP minimum.
 
 Raise these defaults only after the GCP smoke tests pass and real traffic requires it.
 
@@ -209,4 +225,4 @@ The script asks for the exact phrase `destroy-aws-sentinel` and then destroys st
 
 - Existing Aurora data is intentionally not migrated in this first cutover.
 - Live CloudWatch board code is still AWS-specific. For GCP-native live monitoring, replace it with Cloud Logging queries in a later pass.
-- The runtime uses the Cloud SQL Python Connector with the Cloud SQL Client IAM role, so Cloud Run and the Pub/Sub function do not need static database IP allowlists.
+- The runtime uses Cloud SQL IAM integration, so Cloud Run and the Pub/Sub function do not need static database IP allowlists.

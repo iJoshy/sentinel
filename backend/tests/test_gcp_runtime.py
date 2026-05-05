@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import sys
+import threading
 import types
 from unittest.mock import MagicMock, patch
 
@@ -34,6 +35,62 @@ def test_get_database_uses_postgres_when_gcp_configured(
     monkeypatch.setattr(store, "PostgresDatabase", _FakePostgres)
 
     assert isinstance(store.get_database(), _FakePostgres)
+
+
+def test_postgres_pg8000_cursor_does_not_need_context_manager() -> None:
+    from common.store import PostgresDatabase
+
+    class _Cursor:
+        description = [("id",), ("status",)]
+        rowcount = 1
+
+        def __init__(self) -> None:
+            self.closed = False
+            self.executed: list[tuple[str, list[object]]] = []
+
+        def execute(self, sql: str, values: list[object]) -> None:
+            self.executed.append((sql, values))
+
+        def fetchall(self) -> list[tuple[str, str]]:
+            return [("job-123", "completed")]
+
+        def close(self) -> None:
+            self.closed = True
+
+    class _Connection:
+        def __init__(self) -> None:
+            self.cursors: list[_Cursor] = []
+            self.committed = False
+            self.rolled_back = False
+
+        def cursor(self) -> _Cursor:
+            cur = _Cursor()
+            self.cursors.append(cur)
+            return cur
+
+        def commit(self) -> None:
+            self.committed = True
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+    conn = _Connection()
+    db = object.__new__(PostgresDatabase)
+    db._driver = "pg8000"
+    db._conn = conn
+    db._lock = threading.Lock()
+
+    rows = db._query("SELECT id, status FROM jobs WHERE id=:id", {"id": "job-123"})
+    updated = db._execute(
+        "UPDATE jobs SET status=:status WHERE id=:id",
+        {"status": "completed", "id": "job-123"},
+    )
+
+    assert rows == [{"id": "job-123", "status": "completed"}]
+    assert updated == 1
+    assert conn.committed is True
+    assert conn.rolled_back is False
+    assert all(cur.closed for cur in conn.cursors)
 
 
 def test_enqueue_job_publishes_to_pubsub(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,6 +134,17 @@ def test_gcp_function_decodes_pubsub_and_runs_job() -> None:
         run_job.return_value = MagicMock(model_dump=lambda: {"status": "completed"})
         assert pubsub_run_job(event) == {"status": "completed"}
         run_job.assert_called_once_with("job-123", db=None)
+
+
+def test_gcp_function_accepts_background_pubsub_signature() -> None:
+    from gcp_function import pubsub_run_job
+
+    payload = base64.b64encode(json.dumps({"job_id": "job-456"}).encode()).decode()
+
+    with patch("gcp_function.run_job") as run_job:
+        run_job.return_value = MagicMock(model_dump=lambda: {"status": "completed"})
+        assert pubsub_run_job({"data": payload}, object()) == {"status": "completed"}
+        run_job.assert_called_once_with("job-456", db=None)
 
 
 def test_sendgrid_email_path(monkeypatch: pytest.MonkeyPatch) -> None:

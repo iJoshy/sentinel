@@ -12,20 +12,26 @@ from common.pipeline import run_job
 logger = logging.getLogger(__name__)
 
 
-def _decode_pubsub_payload(cloud_event: Any) -> dict[str, Any]:
-    data = getattr(cloud_event, "data", None) or cloud_event
-    message = (data or {}).get("message") or {}
-    raw = message.get("data") or ""
+def _decode_pubsub_payload(event: Any) -> dict[str, Any]:
+    data = getattr(event, "data", None) or event or {}
+    message = data.get("message") or {}
+    raw = message.get("data") or data.get("data") or ""
     if not raw:
         return {}
     decoded = base64.b64decode(raw).decode("utf-8")
     return json.loads(decoded)
 
 
-def pubsub_run_job(cloud_event: Any) -> dict[str, Any]:
-    """Run one analysis job from a Pub/Sub CloudEvent."""
+def pubsub_run_job(event: Any, context: Any | None = None) -> dict[str, Any]:
+    """Run one analysis job from Pub/Sub.
 
-    payload = _decode_pubsub_payload(cloud_event)
+    Cloud Functions Gen2 may invoke this entrypoint with a CloudEvent-shaped
+    object or with the older ``(data, context)`` background-event signature,
+    depending on the Functions Framework trigger mode.
+    """
+
+    del context
+    payload = _decode_pubsub_payload(event)
     job_id = str(payload.get("job_id") or "").strip()
     if not job_id:
         raise ValueError("Missing job_id in Pub/Sub message")

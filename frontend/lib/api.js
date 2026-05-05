@@ -390,13 +390,18 @@ export async function pollJobUntilDone(jobId, token, { intervalMs = 480, maxWait
 /**
  * SSE over fetch (supports Authorization). Invokes onEvent for each message; resolves with final job or null.
  */
-export async function streamJobUntilTerminal(jobId, token, { onEvent } = {}) {
+export async function streamJobUntilTerminal(jobId, token, { onEvent, maxWaitMs = 180000 } = {}) {
   const baseUrl = getBaseUrl();
   const headers = {};
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
-  const res = await fetch(`${baseUrl}/api/jobs/${jobId}/stream`, { headers });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), maxWaitMs);
+  const res = await fetch(`${baseUrl}/api/jobs/${jobId}/stream`, {
+    headers,
+    signal: controller.signal,
+  });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `Stream failed: ${res.status}`);
@@ -408,30 +413,38 @@ export async function streamJobUntilTerminal(jobId, token, { onEvent } = {}) {
   const decoder = new TextDecoder();
   let buffer = "";
   let finalJob = null;
+  const started = Date.now();
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let sep;
-    while ((sep = buffer.indexOf("\n\n")) !== -1) {
-      const block = buffer.slice(0, sep);
-      buffer = buffer.slice(sep + 2);
-      for (const line of block.split("\n")) {
-        if (!line.startsWith("data: ")) continue;
-        const raw = line.slice(6);
-        let payload;
-        try {
-          payload = JSON.parse(raw);
-        } catch {
-          continue;
-        }
-        if (onEvent) onEvent(payload);
-        if (payload.terminal && payload.job) {
-          finalJob = payload.job;
+  try {
+    while (true) {
+      if (Date.now() - started >= maxWaitMs) {
+        throw new Error("Analysis stream timed out.");
+      }
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const block = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        for (const line of block.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const raw = line.slice(6);
+          let payload;
+          try {
+            payload = JSON.parse(raw);
+          } catch {
+            continue;
+          }
+          if (onEvent) onEvent(payload);
+          if (payload.terminal && payload.job) {
+            finalJob = payload.job;
+          }
         }
       }
     }
+  } finally {
+    clearTimeout(timeoutId);
   }
   return finalJob;
 }

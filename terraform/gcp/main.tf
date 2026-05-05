@@ -521,7 +521,7 @@ resource "google_cloud_run_v2_service" "api" {
       }
       env {
         name  = "GCP_USE_CLOUDSQL_CONNECTOR"
-        value = "true"
+        value = "false"
       }
       env {
         name  = "PUBSUB_JOBS_TOPIC"

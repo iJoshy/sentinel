@@ -1718,12 +1718,16 @@ class PostgresDatabase(_SentinelDb):
     ) -> list[dict[str, Any]]:
         del transaction_id
         with self._lock:
-            with self._conn.cursor() as cur:
-                if self._driver == "pg8000":
+            if self._driver == "pg8000":
+                cur = self._conn.cursor()
+                try:
                     q, values = self._pg8000_sql(sql, params)
                     cur.execute(q, values)
                     columns = [col[0] for col in cur.description or []]
                     return [dict(zip(columns, row)) for row in cur.fetchall()]
+                finally:
+                    cur.close()
+            with self._conn.cursor() as cur:
                 cur.execute(self._sql(sql), params or {})
                 return [dict(row) for row in cur.fetchall()]
 
@@ -1736,8 +1740,9 @@ class PostgresDatabase(_SentinelDb):
     ) -> dict[str, Any] | None:
         del transaction_id
         with self._lock:
-            with self._conn.cursor() as cur:
-                if self._driver == "pg8000":
+            if self._driver == "pg8000":
+                cur = self._conn.cursor()
+                try:
                     q, values = self._pg8000_sql(sql, params)
                     cur.execute(q, values)
                     row = cur.fetchone()
@@ -1745,6 +1750,9 @@ class PostgresDatabase(_SentinelDb):
                         return None
                     columns = [col[0] for col in cur.description or []]
                     return dict(zip(columns, row))
+                finally:
+                    cur.close()
+            with self._conn.cursor() as cur:
                 cur.execute(self._sql(sql), params or {})
                 row = cur.fetchone()
                 return dict(row) if row else None
@@ -1760,10 +1768,13 @@ class PostgresDatabase(_SentinelDb):
         with self._lock:
             if self._driver == "pg8000":
                 try:
-                    with self._conn.cursor() as cur:
+                    cur = self._conn.cursor()
+                    try:
                         q, values = self._pg8000_sql(sql, params)
                         cur.execute(q, values)
                         rowcount = int(cur.rowcount or 0)
+                    finally:
+                        cur.close()
                     self._conn.commit()
                     return rowcount
                 except Exception:
@@ -1778,11 +1789,14 @@ class PostgresDatabase(_SentinelDb):
         with self._lock:
             if self._driver == "pg8000":
                 try:
-                    with self._conn.cursor() as cur:
+                    cur = self._conn.cursor()
+                    try:
                         for statement in statements:
                             sql = statement.strip()
                             if sql:
                                 cur.execute(sql)
+                    finally:
+                        cur.close()
                     self._conn.commit()
                 except Exception:
                     self._conn.rollback()
