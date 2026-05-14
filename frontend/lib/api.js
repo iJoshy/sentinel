@@ -329,6 +329,53 @@ export async function refreshLiveBoard(token) {
   });
 }
 
+export async function fetchLiveApplications(token) {
+  return request("/api/live/applications", { token });
+}
+
+export async function createLiveApplication(payload, token) {
+  return request("/api/live/applications", {
+    method: "POST",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function updateLiveApplication(applicationId, payload, token) {
+  return request(`/api/live/applications/${encodeURIComponent(applicationId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function createLiveService(applicationId, payload, token) {
+  return request(`/api/live/applications/${encodeURIComponent(applicationId)}/services`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function createLiveLogSource(serviceId, payload, token) {
+  return request(`/api/live/services/${encodeURIComponent(serviceId)}/log-sources`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+    token,
+  });
+}
+
+export async function correlateLiveApplication(applicationId, token) {
+  return request(`/api/live/applications/${encodeURIComponent(applicationId)}/correlate`, {
+    method: "POST",
+    token,
+  });
+}
+
+export async function fetchLiveSignals(applicationId, token) {
+  return request(`/api/live/applications/${encodeURIComponent(applicationId)}/signals`, { token });
+}
+
 /**
  * Download GET /api/jobs/{id}/export?format=json|pdf as a file.
  * Pass a pre-fetched `token` when possible (e.g. from a hook) so the save dialog still opens after async work

@@ -156,6 +156,11 @@ def pubsub_jobs_topic() -> str:
     return os.getenv("PUBSUB_JOBS_TOPIC", "").strip()
 
 
+def live_ingest_token() -> str:
+    """Shared token for service-to-service Live Incident log ingestion."""
+    return os.getenv("LIVE_INGEST_TOKEN", "").strip()
+
+
 def active_model() -> str:
     """Return the model identifier for whichever LLM backend is active.
 

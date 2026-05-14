@@ -111,6 +111,13 @@ variable "integration_notify_severities" {
   default     = "high,critical"
 }
 
+variable "live_ingest_token" {
+  description = "Shared token used by service-to-service Live Incident log ingestion endpoints."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "db_name" {
   description = "Cloud SQL database name."
   type        = string
@@ -352,6 +359,20 @@ resource "google_secret_manager_secret_version" "sendgrid_api_key" {
   secret_data = var.sendgrid_api_key
 }
 
+resource "google_secret_manager_secret" "live_ingest_token" {
+  secret_id = "${local.name_prefix}-live-ingest-token"
+  labels    = local.labels
+  replication {
+    auto {}
+  }
+  depends_on = [google_project_service.required]
+}
+
+resource "google_secret_manager_secret_version" "live_ingest_token" {
+  secret      = google_secret_manager_secret.live_ingest_token.id
+  secret_data = var.live_ingest_token
+}
+
 resource "google_secret_manager_secret" "pushover_token" {
   secret_id = "${local.name_prefix}-pushover-token"
   labels    = local.labels
@@ -540,6 +561,15 @@ resource "google_cloud_run_v2_service" "api" {
         value_source {
           secret_key_ref {
             secret  = google_secret_manager_secret.db_password.secret_id
+            version = "latest"
+          }
+        }
+      }
+      env {
+        name = "LIVE_INGEST_TOKEN"
+        value_source {
+          secret_key_ref {
+            secret  = google_secret_manager_secret.live_ingest_token.secret_id
             version = "latest"
           }
         }

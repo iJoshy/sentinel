@@ -29,6 +29,84 @@ CREATE TABLE IF NOT EXISTS live_monitor_configs (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS live_applications (
+  id TEXT PRIMARY KEY,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  environment TEXT NOT NULL DEFAULT 'production',
+  description TEXT,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (clerk_user_id, name, environment)
+);
+
+CREATE TABLE IF NOT EXISTS live_services (
+  id TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES live_applications(id) ON DELETE CASCADE,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  service_type TEXT NOT NULL DEFAULT 'service',
+  criticality TEXT NOT NULL DEFAULT 'medium',
+  owner TEXT,
+  dependency_order INTEGER NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (application_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS live_log_sources (
+  id TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES live_applications(id) ON DELETE CASCADE,
+  service_id TEXT NOT NULL REFERENCES live_services(id) ON DELETE CASCADE,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  source_type TEXT NOT NULL DEFAULT 'log',
+  source_ref TEXT NOT NULL,
+  filter_query TEXT,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  last_cursor TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS live_log_events (
+  id TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES live_applications(id) ON DELETE CASCADE,
+  service_id TEXT NOT NULL REFERENCES live_services(id) ON DELETE CASCADE,
+  log_source_id TEXT REFERENCES live_log_sources(id) ON DELETE SET NULL,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  event_timestamp TEXT,
+  severity TEXT NOT NULL DEFAULT 'default',
+  message TEXT NOT NULL,
+  trace_id TEXT,
+  labels_json TEXT NOT NULL DEFAULT '{}',
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  received_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS live_signals (
+  id TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES live_applications(id) ON DELETE CASCADE,
+  service_id TEXT NOT NULL REFERENCES live_services(id) ON DELETE CASCADE,
+  log_source_id TEXT REFERENCES live_log_sources(id) ON DELETE SET NULL,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  signal_type TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'medium',
+  fingerprint TEXT NOT NULL,
+  event_count INTEGER NOT NULL DEFAULT 1,
+  window_start TEXT,
+  window_end TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (clerk_user_id, application_id, service_id, fingerprint)
+);
+
 CREATE TABLE IF NOT EXISTS incidents (
   id TEXT PRIMARY KEY,
   clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id),
@@ -160,6 +238,21 @@ CREATE INDEX IF NOT EXISTS idx_user_entitlements_clerk
 
 CREATE INDEX IF NOT EXISTS idx_live_monitor_configs_clerk
   ON live_monitor_configs(clerk_user_id);
+
+CREATE INDEX IF NOT EXISTS idx_live_applications_clerk
+  ON live_applications(clerk_user_id, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_live_services_app
+  ON live_services(application_id, dependency_order, name);
+
+CREATE INDEX IF NOT EXISTS idx_live_log_sources_service
+  ON live_log_sources(service_id, provider);
+
+CREATE INDEX IF NOT EXISTS idx_live_log_events_app_received
+  ON live_log_events(application_id, received_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_live_signals_app_updated
+  ON live_signals(application_id, updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_live_incidents_clerk_seen
   ON live_incidents(clerk_user_id, last_seen_at DESC);

@@ -290,6 +290,96 @@ class LiveMonitorConfigUpdate(BaseModel):
     lookback_minutes: int = Field(default=5, ge=1, le=60)
     error_threshold: int = Field(default=5, ge=1, le=100)
 
+
+LiveProvider = Literal["gcp_cloud_logging", "aws_cloudwatch", "webhook", "opentelemetry"]
+ServiceCriticality = Literal["low", "medium", "high", "critical"]
+
+
+class LiveApplicationCreate(BaseModel):
+    """A business application made of multiple services."""
+
+    name: str = Field(min_length=1, max_length=160)
+    environment: str = Field(default="production", min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=1000)
+    enabled: bool = True
+
+
+class LiveApplicationUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    environment: str | None = Field(default=None, min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=1000)
+    enabled: bool | None = None
+
+
+class LiveServiceCreate(BaseModel):
+    """One microservice that belongs to a live application."""
+
+    name: str = Field(min_length=1, max_length=160)
+    service_type: str = Field(default="service", max_length=80)
+    criticality: ServiceCriticality = "medium"
+    owner: str | None = Field(default=None, max_length=160)
+    dependency_order: int = Field(default=0, ge=0, le=1000)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class LiveServiceUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    service_type: str | None = Field(default=None, max_length=80)
+    criticality: ServiceCriticality | None = None
+    owner: str | None = Field(default=None, max_length=160)
+    dependency_order: int | None = Field(default=None, ge=0, le=1000)
+    metadata: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class LiveLogSourceCreate(BaseModel):
+    """Provider-specific log source attached to one service."""
+
+    provider: LiveProvider = "gcp_cloud_logging"
+    source_type: str = Field(default="log", max_length=80)
+    source_ref: str = Field(min_length=1, max_length=500)
+    filter_query: str | None = Field(default=None, max_length=2000)
+    enabled: bool = True
+
+
+class LiveLogSourceUpdate(BaseModel):
+    provider: LiveProvider | None = None
+    source_type: str | None = Field(default=None, max_length=80)
+    source_ref: str | None = Field(default=None, min_length=1, max_length=500)
+    filter_query: str | None = Field(default=None, max_length=2000)
+    enabled: bool | None = None
+
+
+class LiveLogRecord(BaseModel):
+    """Normalized log event accepted by Live Incident ingestion."""
+
+    timestamp: str | None = None
+    message: str = Field(min_length=1, max_length=10000)
+    severity: str = Field(default="default", max_length=80)
+    trace_id: str | None = Field(default=None, max_length=300)
+    labels: dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class LiveIngestRequest(BaseModel):
+    """Provider-agnostic log ingestion payload for one service."""
+
+    application_id: str = Field(min_length=1)
+    service_id: str = Field(min_length=1)
+    log_source_id: str | None = None
+    provider: LiveProvider = "gcp_cloud_logging"
+    records: list[LiveLogRecord] = Field(default_factory=list, min_length=1, max_length=200)
+
+
+class LiveGcpPubSubIngestRequest(BaseModel):
+    """GCP Pub/Sub push payload for Cloud Logging sinks."""
+
+    application_id: str = Field(min_length=1)
+    service_id: str | None = None
+    log_source_id: str | None = None
+    message: dict[str, Any]
+
 class ReplayFrame(BaseModel):
     index: int
     stage: Literal["queued", "normalize", "summarize", "root_cause", "remediate", "completed", "failed"]

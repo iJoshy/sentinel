@@ -61,6 +61,84 @@ CREATE TABLE IF NOT EXISTS live_monitor_configs (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS live_applications (
+  id TEXT PRIMARY KEY,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  environment TEXT NOT NULL DEFAULT 'production',
+  description TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (clerk_user_id, name, environment)
+);
+
+CREATE TABLE IF NOT EXISTS live_services (
+  id TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES live_applications(id) ON DELETE CASCADE,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  service_type TEXT NOT NULL DEFAULT 'service',
+  criticality TEXT NOT NULL DEFAULT 'medium',
+  owner TEXT,
+  dependency_order INTEGER NOT NULL DEFAULT 0,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (application_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS live_log_sources (
+  id TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES live_applications(id) ON DELETE CASCADE,
+  service_id TEXT NOT NULL REFERENCES live_services(id) ON DELETE CASCADE,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  source_type TEXT NOT NULL DEFAULT 'log',
+  source_ref TEXT NOT NULL,
+  filter_query TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_cursor TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS live_log_events (
+  id TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES live_applications(id) ON DELETE CASCADE,
+  service_id TEXT NOT NULL REFERENCES live_services(id) ON DELETE CASCADE,
+  log_source_id TEXT REFERENCES live_log_sources(id) ON DELETE SET NULL,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  event_timestamp TEXT,
+  severity TEXT NOT NULL DEFAULT 'default',
+  message TEXT NOT NULL,
+  trace_id TEXT,
+  labels_json TEXT NOT NULL DEFAULT '{}',
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  received_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS live_signals (
+  id TEXT PRIMARY KEY,
+  application_id TEXT NOT NULL REFERENCES live_applications(id) ON DELETE CASCADE,
+  service_id TEXT NOT NULL REFERENCES live_services(id) ON DELETE CASCADE,
+  log_source_id TEXT REFERENCES live_log_sources(id) ON DELETE SET NULL,
+  clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id) ON DELETE CASCADE,
+  signal_type TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'medium',
+  fingerprint TEXT NOT NULL,
+  event_count INTEGER NOT NULL DEFAULT 1,
+  window_start TEXT,
+  window_end TEXT,
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (clerk_user_id, application_id, service_id, fingerprint)
+);
+
 CREATE TABLE IF NOT EXISTS incidents (
   id TEXT PRIMARY KEY,
   clerk_user_id TEXT NOT NULL REFERENCES users(clerk_user_id),
@@ -179,6 +257,21 @@ CREATE INDEX IF NOT EXISTS idx_user_entitlements_clerk
 
 CREATE INDEX IF NOT EXISTS idx_live_monitor_configs_clerk
   ON live_monitor_configs(clerk_user_id);
+
+CREATE INDEX IF NOT EXISTS idx_live_applications_clerk
+  ON live_applications(clerk_user_id, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_live_services_app
+  ON live_services(application_id, dependency_order, name);
+
+CREATE INDEX IF NOT EXISTS idx_live_log_sources_service
+  ON live_log_sources(service_id, provider);
+
+CREATE INDEX IF NOT EXISTS idx_live_log_events_app_received
+  ON live_log_events(application_id, received_at);
+
+CREATE INDEX IF NOT EXISTS idx_live_signals_app_updated
+  ON live_signals(application_id, updated_at);
 
 CREATE INDEX IF NOT EXISTS idx_live_incidents_clerk_seen
   ON live_incidents(clerk_user_id, last_seen_at);
@@ -690,6 +783,610 @@ class _SentinelDb:
             },
         )
         return self.get_live_monitor_config(uid)
+
+    @staticmethod
+    def _decode_json_object(raw: Any) -> dict[str, Any]:
+        if isinstance(raw, dict):
+            return raw
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(str(raw))
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+
+    def _live_log_source_view(self, row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "application_id": row["application_id"],
+            "service_id": row["service_id"],
+            "provider": row.get("provider") or "gcp_cloud_logging",
+            "source_type": row.get("source_type") or "log",
+            "source_ref": row.get("source_ref") or "",
+            "filter_query": row.get("filter_query"),
+            "enabled": bool(row.get("enabled", True)),
+            "last_cursor": row.get("last_cursor"),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def _live_service_view(self, row: dict[str, Any], sources: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "application_id": row["application_id"],
+            "name": row.get("name") or "",
+            "service_type": row.get("service_type") or "service",
+            "criticality": row.get("criticality") or "medium",
+            "owner": row.get("owner"),
+            "dependency_order": int(row.get("dependency_order") or 0),
+            "metadata": self._decode_json_object(row.get("metadata_json")),
+            "enabled": bool(row.get("enabled", True)),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+            "log_sources": sources or [],
+        }
+
+    def _live_application_view(
+        self,
+        row: dict[str, Any],
+        services: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "name": row.get("name") or "",
+            "environment": row.get("environment") or "production",
+            "description": row.get("description"),
+            "enabled": bool(row.get("enabled", True)),
+            "created_at": row.get("created_at"),
+            "updated_at": row.get("updated_at"),
+            "services": services or [],
+        }
+
+    def create_live_application(
+        self,
+        clerk_user_id: str,
+        *,
+        name: str,
+        environment: str = "production",
+        description: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        uid = clerk_user_id or "anonymous"
+        now = self._now_iso()
+        app_id = str(uuid.uuid4())
+        self._ensure_user(uid)
+        self._execute(
+            """
+            INSERT INTO live_applications (
+              id, clerk_user_id, name, environment, description, enabled, created_at, updated_at
+            )
+            VALUES (
+              :id, :clerk_user_id, :name, :environment, :description, :enabled, :created_at, :updated_at
+            )
+            ON CONFLICT (clerk_user_id, name, environment)
+            DO UPDATE
+              SET description = EXCLUDED.description,
+                  enabled = EXCLUDED.enabled,
+                  updated_at = EXCLUDED.updated_at
+            """,
+            {
+                "id": app_id,
+                "clerk_user_id": uid,
+                "name": name.strip(),
+                "environment": (environment or "production").strip(),
+                "description": description,
+                "enabled": enabled,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        row = self._query_one(
+            """
+            SELECT * FROM live_applications
+            WHERE clerk_user_id=:clerk_user_id AND name=:name AND environment=:environment
+            """,
+            {"clerk_user_id": uid, "name": name.strip(), "environment": (environment or "production").strip()},
+        )
+        return self._live_application_view(row or {"id": app_id, "name": name, "environment": environment})
+
+    def update_live_application(
+        self,
+        application_id: str,
+        clerk_user_id: str,
+        *,
+        name: str | None = None,
+        environment: str | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+    ) -> dict[str, Any] | None:
+        current = self.get_live_application(application_id, clerk_user_id, include_children=False)
+        if not current:
+            return None
+        self._execute(
+            """
+            UPDATE live_applications
+            SET name=COALESCE(:name, name),
+                environment=COALESCE(:environment, environment),
+                description=COALESCE(:description, description),
+                enabled=COALESCE(:enabled, enabled),
+                updated_at=:updated_at
+            WHERE id=:id AND clerk_user_id=:clerk_user_id
+            """,
+            {
+                "id": application_id,
+                "clerk_user_id": clerk_user_id or "anonymous",
+                "name": name.strip() if name is not None else None,
+                "environment": environment.strip() if environment is not None else None,
+                "description": description,
+                "enabled": enabled,
+                "updated_at": self._now_iso(),
+            },
+        )
+        return self.get_live_application(application_id, clerk_user_id)
+
+    def get_live_application(
+        self,
+        application_id: str,
+        clerk_user_id: str,
+        *,
+        include_children: bool = True,
+    ) -> dict[str, Any] | None:
+        row = self._query_one(
+            """
+            SELECT * FROM live_applications
+            WHERE id=:id AND clerk_user_id=:clerk_user_id
+            """,
+            {"id": application_id, "clerk_user_id": clerk_user_id or "anonymous"},
+        )
+        if not row:
+            return None
+        if not include_children:
+            return self._live_application_view(row)
+        services = self.list_live_services(application_id, clerk_user_id)
+        return self._live_application_view(row, services)
+
+    def get_live_application_owner(self, application_id: str) -> str | None:
+        row = self._query_one(
+            "SELECT clerk_user_id FROM live_applications WHERE id=:id",
+            {"id": application_id},
+        )
+        return str(row["clerk_user_id"]) if row and row.get("clerk_user_id") else None
+
+    def list_live_applications(self, clerk_user_id: str) -> list[dict[str, Any]]:
+        rows = self._query(
+            """
+            SELECT * FROM live_applications
+            WHERE clerk_user_id=:clerk_user_id
+            ORDER BY updated_at DESC, name ASC
+            """,
+            {"clerk_user_id": clerk_user_id or "anonymous"},
+        )
+        return [self._live_application_view(row, self.list_live_services(row["id"], clerk_user_id)) for row in rows]
+
+    def create_live_service(
+        self,
+        application_id: str,
+        clerk_user_id: str,
+        *,
+        name: str,
+        service_type: str = "service",
+        criticality: str = "medium",
+        owner: str | None = None,
+        dependency_order: int = 0,
+        metadata: dict[str, Any] | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any] | None:
+        uid = clerk_user_id or "anonymous"
+        if not self.get_live_application(application_id, uid, include_children=False):
+            return None
+        now = self._now_iso()
+        service_id = str(uuid.uuid4())
+        self._execute(
+            """
+            INSERT INTO live_services (
+              id, application_id, clerk_user_id, name, service_type, criticality,
+              owner, dependency_order, metadata_json, enabled, created_at, updated_at
+            )
+            VALUES (
+              :id, :application_id, :clerk_user_id, :name, :service_type, :criticality,
+              :owner, :dependency_order, :metadata_json, :enabled, :created_at, :updated_at
+            )
+            ON CONFLICT (application_id, name)
+            DO UPDATE
+              SET service_type = EXCLUDED.service_type,
+                  criticality = EXCLUDED.criticality,
+                  owner = EXCLUDED.owner,
+                  dependency_order = EXCLUDED.dependency_order,
+                  metadata_json = EXCLUDED.metadata_json,
+                  enabled = EXCLUDED.enabled,
+                  updated_at = EXCLUDED.updated_at
+            """,
+            {
+                "id": service_id,
+                "application_id": application_id,
+                "clerk_user_id": uid,
+                "name": name.strip(),
+                "service_type": (service_type or "service").strip(),
+                "criticality": (criticality or "medium").strip(),
+                "owner": owner,
+                "dependency_order": dependency_order,
+                "metadata_json": json.dumps(metadata or {}),
+                "enabled": enabled,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        row = self._query_one(
+            """
+            SELECT * FROM live_services
+            WHERE application_id=:application_id AND name=:name AND clerk_user_id=:clerk_user_id
+            """,
+            {"application_id": application_id, "name": name.strip(), "clerk_user_id": uid},
+        )
+        return self._live_service_view(row or {"id": service_id, "application_id": application_id, "name": name})
+
+    def list_live_services(self, application_id: str, clerk_user_id: str) -> list[dict[str, Any]]:
+        rows = self._query(
+            """
+            SELECT * FROM live_services
+            WHERE application_id=:application_id AND clerk_user_id=:clerk_user_id
+            ORDER BY dependency_order ASC, name ASC
+            """,
+            {"application_id": application_id, "clerk_user_id": clerk_user_id or "anonymous"},
+        )
+        return [self._live_service_view(row, self.list_live_log_sources(row["id"], clerk_user_id)) for row in rows]
+
+    def create_live_log_source(
+        self,
+        service_id: str,
+        clerk_user_id: str,
+        *,
+        provider: str,
+        source_type: str = "log",
+        source_ref: str,
+        filter_query: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any] | None:
+        uid = clerk_user_id or "anonymous"
+        service = self._query_one(
+            """
+            SELECT * FROM live_services
+            WHERE id=:service_id AND clerk_user_id=:clerk_user_id
+            """,
+            {"service_id": service_id, "clerk_user_id": uid},
+        )
+        if not service:
+            return None
+        now = self._now_iso()
+        source_id = str(uuid.uuid4())
+        self._execute(
+            """
+            INSERT INTO live_log_sources (
+              id, application_id, service_id, clerk_user_id, provider, source_type,
+              source_ref, filter_query, enabled, created_at, updated_at
+            )
+            VALUES (
+              :id, :application_id, :service_id, :clerk_user_id, :provider, :source_type,
+              :source_ref, :filter_query, :enabled, :created_at, :updated_at
+            )
+            """,
+            {
+                "id": source_id,
+                "application_id": service["application_id"],
+                "service_id": service_id,
+                "clerk_user_id": uid,
+                "provider": provider,
+                "source_type": source_type or "log",
+                "source_ref": source_ref.strip(),
+                "filter_query": filter_query,
+                "enabled": enabled,
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
+        row = self._query_one("SELECT * FROM live_log_sources WHERE id=:id", {"id": source_id})
+        return self._live_log_source_view(row or {"id": source_id, "application_id": service["application_id"], "service_id": service_id})
+
+    def list_live_log_sources(self, service_id: str, clerk_user_id: str) -> list[dict[str, Any]]:
+        rows = self._query(
+            """
+            SELECT * FROM live_log_sources
+            WHERE service_id=:service_id AND clerk_user_id=:clerk_user_id
+            ORDER BY created_at ASC
+            """,
+            {"service_id": service_id, "clerk_user_id": clerk_user_id or "anonymous"},
+        )
+        return [self._live_log_source_view(row) for row in rows]
+
+    def get_live_service(self, service_id: str, clerk_user_id: str) -> dict[str, Any] | None:
+        row = self._query_one(
+            """
+            SELECT * FROM live_services
+            WHERE id=:service_id AND clerk_user_id=:clerk_user_id
+            """,
+            {"service_id": service_id, "clerk_user_id": clerk_user_id or "anonymous"},
+        )
+        if not row:
+            return None
+        return self._live_service_view(row, self.list_live_log_sources(service_id, clerk_user_id))
+
+    def get_live_log_source(self, log_source_id: str, clerk_user_id: str) -> dict[str, Any] | None:
+        row = self._query_one(
+            """
+            SELECT * FROM live_log_sources
+            WHERE id=:log_source_id AND clerk_user_id=:clerk_user_id
+            """,
+            {"log_source_id": log_source_id, "clerk_user_id": clerk_user_id or "anonymous"},
+        )
+        return self._live_log_source_view(row) if row else None
+
+    def find_live_log_source_for_event(
+        self,
+        application_id: str,
+        clerk_user_id: str,
+        *,
+        provider: str,
+        service_name: str | None = None,
+        log_source_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        uid = clerk_user_id or "anonymous"
+        if log_source_id:
+            source = self.get_live_log_source(log_source_id, uid)
+            if source and source["application_id"] == application_id:
+                return source
+        rows = self._query(
+            """
+            SELECT
+              s.id AS service_id,
+              s.name AS service_name,
+              ls.*
+            FROM live_log_sources ls
+            JOIN live_services s ON s.id = ls.service_id
+            WHERE ls.application_id=:application_id
+              AND ls.clerk_user_id=:clerk_user_id
+              AND ls.provider=:provider
+              AND ls.enabled = :enabled
+            ORDER BY s.dependency_order ASC, s.name ASC
+            """,
+            {
+                "application_id": application_id,
+                "clerk_user_id": uid,
+                "provider": provider,
+                "enabled": True,
+            },
+        )
+        if not rows:
+            return None
+        if service_name:
+            needle = service_name.strip().lower()
+            for row in rows:
+                ref = str(row.get("source_ref") or "").lower()
+                filt = str(row.get("filter_query") or "").lower()
+                svc_name = str(row.get("service_name") or "").lower()
+                if needle and (needle == svc_name or needle in ref or needle in filt):
+                    return self._live_log_source_view(row)
+        return self._live_log_source_view(rows[0])
+
+    def create_live_log_event(
+        self,
+        *,
+        application_id: str,
+        service_id: str,
+        clerk_user_id: str,
+        provider: str,
+        message: str,
+        severity: str = "default",
+        log_source_id: str | None = None,
+        event_timestamp: str | None = None,
+        trace_id: str | None = None,
+        labels: dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        event_id = str(uuid.uuid4())
+        received_at = self._now_iso()
+        self._execute(
+            """
+            INSERT INTO live_log_events (
+              id, application_id, service_id, log_source_id, clerk_user_id, provider,
+              event_timestamp, severity, message, trace_id, labels_json, payload_json, received_at
+            )
+            VALUES (
+              :id, :application_id, :service_id, :log_source_id, :clerk_user_id, :provider,
+              :event_timestamp, :severity, :message, :trace_id, :labels_json, :payload_json, :received_at
+            )
+            """,
+            {
+                "id": event_id,
+                "application_id": application_id,
+                "service_id": service_id,
+                "log_source_id": log_source_id,
+                "clerk_user_id": clerk_user_id or "anonymous",
+                "provider": provider,
+                "event_timestamp": event_timestamp,
+                "severity": (severity or "default").lower(),
+                "message": message,
+                "trace_id": trace_id,
+                "labels_json": json.dumps(labels or {}),
+                "payload_json": json.dumps(payload or {}),
+                "received_at": received_at,
+            },
+        )
+        return {
+            "id": event_id,
+            "application_id": application_id,
+            "service_id": service_id,
+            "log_source_id": log_source_id,
+            "provider": provider,
+            "event_timestamp": event_timestamp,
+            "severity": (severity or "default").lower(),
+            "message": message,
+            "trace_id": trace_id,
+            "received_at": received_at,
+        }
+
+    def upsert_live_signal(
+        self,
+        *,
+        application_id: str,
+        service_id: str,
+        clerk_user_id: str,
+        signal_type: str,
+        severity: str,
+        fingerprint: str,
+        evidence: list[dict[str, Any]],
+        log_source_id: str | None = None,
+        window_start: str | None = None,
+        window_end: str | None = None,
+    ) -> dict[str, Any]:
+        uid = clerk_user_id or "anonymous"
+        now = self._now_iso()
+        existing = self._query_one(
+            """
+            SELECT * FROM live_signals
+            WHERE clerk_user_id=:clerk_user_id
+              AND application_id=:application_id
+              AND service_id=:service_id
+              AND fingerprint=:fingerprint
+            """,
+            {
+                "clerk_user_id": uid,
+                "application_id": application_id,
+                "service_id": service_id,
+                "fingerprint": fingerprint,
+            },
+        )
+        if existing:
+            prior = []
+            try:
+                parsed = json.loads(existing.get("evidence_json") or "[]")
+                if isinstance(parsed, list):
+                    prior = parsed
+            except json.JSONDecodeError:
+                prior = []
+            merged_evidence = (prior + evidence)[-12:]
+            self._execute(
+                """
+                UPDATE live_signals
+                SET severity=:severity,
+                    event_count=:event_count,
+                    window_start=COALESCE(:window_start, window_start),
+                    window_end=:window_end,
+                    evidence_json=:evidence_json,
+                    status='open',
+                    updated_at=:updated_at
+                WHERE id=:id
+                """,
+                {
+                    "id": existing["id"],
+                    "severity": severity,
+                    "event_count": int(existing.get("event_count") or 0) + max(1, len(evidence)),
+                    "window_start": window_start,
+                    "window_end": window_end or now,
+                    "evidence_json": json.dumps(merged_evidence),
+                    "updated_at": now,
+                },
+            )
+            signal_id = existing["id"]
+        else:
+            signal_id = str(uuid.uuid4())
+            self._execute(
+                """
+                INSERT INTO live_signals (
+                  id, application_id, service_id, log_source_id, clerk_user_id,
+                  signal_type, severity, fingerprint, event_count, window_start, window_end,
+                  evidence_json, status, created_at, updated_at
+                )
+                VALUES (
+                  :id, :application_id, :service_id, :log_source_id, :clerk_user_id,
+                  :signal_type, :severity, :fingerprint, :event_count, :window_start, :window_end,
+                  :evidence_json, 'open', :created_at, :updated_at
+                )
+                """,
+                {
+                    "id": signal_id,
+                    "application_id": application_id,
+                    "service_id": service_id,
+                    "log_source_id": log_source_id,
+                    "clerk_user_id": uid,
+                    "signal_type": signal_type,
+                    "severity": severity,
+                    "fingerprint": fingerprint,
+                    "event_count": max(1, len(evidence)),
+                    "window_start": window_start or now,
+                    "window_end": window_end or now,
+                    "evidence_json": json.dumps(evidence[-12:]),
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            )
+        row = self._query_one("SELECT * FROM live_signals WHERE id=:id", {"id": signal_id}) or {}
+        return {
+            "id": row.get("id", signal_id),
+            "application_id": row.get("application_id", application_id),
+            "service_id": row.get("service_id", service_id),
+            "log_source_id": row.get("log_source_id"),
+            "signal_type": row.get("signal_type", signal_type),
+            "severity": row.get("severity", severity),
+            "fingerprint": row.get("fingerprint", fingerprint),
+            "event_count": int(row.get("event_count") or 0),
+            "status": row.get("status", "open"),
+            "updated_at": row.get("updated_at"),
+        }
+
+    def list_live_signals(self, application_id: str, clerk_user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self._query(
+            """
+            SELECT sig.*,
+                   svc.name AS service_name,
+                   svc.service_type AS service_type,
+                   svc.criticality AS service_criticality,
+                   svc.owner AS service_owner,
+                   svc.dependency_order AS dependency_order
+            FROM live_signals sig
+            JOIN live_services svc ON svc.id = sig.service_id
+            WHERE sig.application_id=:application_id AND sig.clerk_user_id=:clerk_user_id
+            ORDER BY sig.updated_at DESC
+            LIMIT :limit
+            """,
+            {
+                "application_id": application_id,
+                "clerk_user_id": clerk_user_id or "anonymous",
+                "limit": limit,
+            },
+        )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            evidence = []
+            try:
+                parsed = json.loads(row.get("evidence_json") or "[]")
+                if isinstance(parsed, list):
+                    evidence = parsed
+            except json.JSONDecodeError:
+                evidence = []
+            out.append(
+                {
+                    "id": row["id"],
+                    "application_id": row["application_id"],
+                    "service_id": row["service_id"],
+                    "service_name": row.get("service_name"),
+                    "service_type": row.get("service_type"),
+                    "service_criticality": row.get("service_criticality"),
+                    "service_owner": row.get("service_owner"),
+                    "dependency_order": int(row.get("dependency_order") or 0),
+                    "log_source_id": row.get("log_source_id"),
+                    "signal_type": row.get("signal_type"),
+                    "severity": row.get("severity"),
+                    "fingerprint": row.get("fingerprint"),
+                    "event_count": int(row.get("event_count") or 0),
+                    "window_start": row.get("window_start"),
+                    "window_end": row.get("window_end"),
+                    "evidence": evidence,
+                    "status": row.get("status"),
+                    "updated_at": row.get("updated_at"),
+                }
+            )
+        return out
 
     def touch_live_monitor_poll(self, clerk_user_id: str, *, polled_at: str | None = None) -> None:
         uid = clerk_user_id or "anonymous"

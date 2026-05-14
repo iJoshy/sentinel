@@ -18,12 +18,15 @@ import zipfile
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel as _Base
 
 from api.auth import AuthContext, get_user_entitlements, require_auth, require_feature
+from common.config import live_ingest_token
+from common.live_correlation import correlate_application_signals
+from common.live_ingest import decode_gcp_pubsub_push, ingest_live_records, normalize_gcp_logging_entries
 from common.liveops import list_live_board_data, refresh_live_board
 from common.guardrails import bulk_zip_hidden_threat_reason, bulk_zip_member_rejection_reason
 from common.log_stats import compute_log_stats
@@ -42,7 +45,13 @@ from common.models import (
     IntegrationCreate,
     InvestigationStreamInput,
     JobCreateResponse,
+    LiveApplicationCreate,
+    LiveApplicationUpdate,
+    LiveGcpPubSubIngestRequest,
+    LiveIngestRequest,
+    LiveLogSourceCreate,
     LiveMonitorConfigUpdate,
+    LiveServiceCreate,
     NormalizedIncident,
     RemediationFollowUpRequest,
     IncidentCompareRequest,
@@ -493,6 +502,211 @@ def refresh_live_board_endpoint(
     db = _db()
     try:
         return refresh_live_board(user.user_id, db)
+    finally:
+        db.close()
+
+
+@app.get("/api/live/applications")
+def list_live_applications_endpoint(
+    user: AuthContext = Depends(require_feature("live_incident_board")),
+) -> dict[str, Any]:
+    db = _db()
+    try:
+        return {"applications": db.list_live_applications(user.user_id)}
+    finally:
+        db.close()
+
+
+@app.post("/api/live/applications", status_code=201)
+def create_live_application_endpoint(
+    body: LiveApplicationCreate,
+    user: AuthContext = Depends(require_feature("live_incident_board")),
+) -> dict[str, Any]:
+    db = _db()
+    try:
+        return {
+            "application": db.create_live_application(
+                user.user_id,
+                name=body.name,
+                environment=body.environment,
+                description=body.description,
+                enabled=body.enabled,
+            )
+        }
+    finally:
+        db.close()
+
+
+@app.patch("/api/live/applications/{application_id}")
+def update_live_application_endpoint(
+    application_id: str,
+    body: LiveApplicationUpdate,
+    user: AuthContext = Depends(require_feature("live_incident_board")),
+) -> dict[str, Any]:
+    db = _db()
+    try:
+        app_data = db.update_live_application(
+            application_id,
+            user.user_id,
+            name=body.name,
+            environment=body.environment,
+            description=body.description,
+            enabled=body.enabled,
+        )
+        if not app_data:
+            raise HTTPException(status_code=404, detail="Live application not found")
+        return {"application": app_data}
+    finally:
+        db.close()
+
+
+@app.get("/api/live/applications/{application_id}/signals")
+def list_live_application_signals_endpoint(
+    application_id: str,
+    user: AuthContext = Depends(require_feature("live_incident_board")),
+) -> dict[str, Any]:
+    db = _db()
+    try:
+        app = db.get_live_application(application_id, user.user_id, include_children=False)
+        if not app:
+            raise HTTPException(status_code=404, detail="Live application not found")
+        return {"signals": db.list_live_signals(application_id, user.user_id)}
+    finally:
+        db.close()
+
+
+@app.post("/api/live/applications/{application_id}/services", status_code=201)
+def create_live_service_endpoint(
+    application_id: str,
+    body: LiveServiceCreate,
+    user: AuthContext = Depends(require_feature("live_incident_board")),
+) -> dict[str, Any]:
+    db = _db()
+    try:
+        service = db.create_live_service(
+            application_id,
+            user.user_id,
+            name=body.name,
+            service_type=body.service_type,
+            criticality=body.criticality,
+            owner=body.owner,
+            dependency_order=body.dependency_order,
+            metadata=body.metadata,
+            enabled=body.enabled,
+        )
+        if not service:
+            raise HTTPException(status_code=404, detail="Live application not found")
+        return {
+            "service": service,
+            "application": db.get_live_application(application_id, user.user_id),
+        }
+    finally:
+        db.close()
+
+
+@app.post("/api/live/services/{service_id}/log-sources", status_code=201)
+def create_live_log_source_endpoint(
+    service_id: str,
+    body: LiveLogSourceCreate,
+    user: AuthContext = Depends(require_feature("live_incident_board")),
+) -> dict[str, Any]:
+    db = _db()
+    try:
+        source = db.create_live_log_source(
+            service_id,
+            user.user_id,
+            provider=body.provider,
+            source_type=body.source_type,
+            source_ref=body.source_ref,
+            filter_query=body.filter_query,
+            enabled=body.enabled,
+        )
+        if not source:
+            raise HTTPException(status_code=404, detail="Live service not found")
+        return {
+            "log_source": source,
+            "application": db.get_live_application(source["application_id"], user.user_id),
+        }
+    finally:
+        db.close()
+
+
+@app.post("/api/live/ingest", status_code=202)
+def ingest_live_logs_endpoint(
+    body: LiveIngestRequest,
+    run_analysis: bool = Query(default=True),
+    user: AuthContext = Depends(require_feature("live_incident_board")),
+) -> dict[str, Any]:
+    """Authenticated normalized log ingestion for paid users and test forwarders."""
+
+    db = _db()
+    try:
+        return ingest_live_records(
+            db=db,
+            clerk_user_id=user.user_id,
+            application_id=body.application_id,
+            service_id=body.service_id,
+            log_source_id=body.log_source_id,
+            provider=body.provider,
+            records=[record.model_dump() for record in body.records],
+            run_analysis_async=run_analysis,
+        )
+    finally:
+        db.close()
+
+
+def _require_live_ingest_token(header_value: str | None) -> None:
+    expected = live_ingest_token()
+    if not expected:
+        raise HTTPException(status_code=503, detail="LIVE_INGEST_TOKEN is not configured")
+    if not header_value or header_value != expected:
+        raise HTTPException(status_code=403, detail="Invalid Live Incident ingestion token")
+
+
+@app.post("/api/live/ingest/gcp-pubsub", status_code=202)
+def ingest_live_gcp_pubsub_endpoint(
+    body: LiveGcpPubSubIngestRequest,
+    run_analysis: bool = Query(default=True),
+    x_sentinel_live_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Service-token endpoint for GCP Cloud Logging Pub/Sub push payloads."""
+
+    _require_live_ingest_token(x_sentinel_live_token)
+    db = _db()
+    try:
+        clerk_user_id = db.get_live_application_owner(body.application_id)
+        if not clerk_user_id:
+            raise HTTPException(status_code=404, detail="Live application not found")
+        entries = decode_gcp_pubsub_push(body.message)
+        records = normalize_gcp_logging_entries(entries)
+        return ingest_live_records(
+            db=db,
+            clerk_user_id=clerk_user_id,
+            application_id=body.application_id,
+            service_id=body.service_id,
+            log_source_id=body.log_source_id,
+            provider="gcp_cloud_logging",
+            records=records,
+            run_analysis_async=run_analysis,
+        )
+    finally:
+        db.close()
+
+
+@app.post("/api/live/applications/{application_id}/correlate", status_code=202)
+def correlate_live_application_endpoint(
+    application_id: str,
+    run_analysis: bool = Query(default=True),
+    user: AuthContext = Depends(require_feature("live_incident_board")),
+) -> dict[str, Any]:
+    db = _db()
+    try:
+        return correlate_application_signals(
+            db=db,
+            clerk_user_id=user.user_id,
+            application_id=application_id,
+            run_analysis_async=run_analysis,
+        )
     finally:
         db.close()
 
